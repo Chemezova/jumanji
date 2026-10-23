@@ -547,15 +547,28 @@ const actions = {
 
   // пароль к колоде
   unlockDeck() {
-    const pw = $('#deckPw').value;
+    ui.deckPwValue = $('#deckPw').value;
+    ui.deckShow = $('#deckPw').type === 'text';
+    // пробелы по краям — частая опечатка на телефоне; в самом пароле их нет
+    const pw = ui.deckPwValue.trim();
     if (!pw) return;
     ui.deckBusy = true; ui.deckError = false;
     render();
     openDeck(pw).then(ok => {
       ui.deckBusy = false;
       ui.deckError = !ok;
+      if (ok) ui.deckPwValue = '';
       render();
     });
+    return 'norender';
+  },
+
+  // показать или скрыть пароль, не теряя набранное
+  togglePw() {
+    const f = $('#deckPw');
+    f.type = f.type === 'password' ? 'text' : 'password';
+    $('#pwEye').textContent = f.type === 'password' ? 'Показать' : 'Скрыть';
+    f.focus();
     return 'norender';
   },
 
@@ -948,8 +961,11 @@ function deckLockView() {
   return `<form class="lock" data-form="unlockDeck">
     <div class="logo">ДЖУМАНДЖИ<b>·</b></div>
     <p class="lead" style="color:var(--muted);text-align:center;max-width:280px;margin:0">Колода зашифрована. Введите пароль — на этом телефоне это нужно сделать один раз.</p>
-    <input id="deckPw" class="field" style="max-width:300px" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Пароль" ${ui.deckBusy ? 'disabled' : ''}>
-    ${ui.deckError ? '<div class="note" style="margin:0">Пароль не подошёл</div>' : ''}
+    <div class="pw-row">
+      <input id="deckPw" class="field" type="${ui.deckShow ? 'text' : 'password'}" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Пароль" value="${esc(ui.deckPwValue || '')}" ${ui.deckBusy ? 'disabled' : ''}>
+      <button type="button" id="pwEye" class="pw-eye" data-act="togglePw">${ui.deckShow ? 'Скрыть' : 'Показать'}</button>
+    </div>
+    ${ui.deckError ? '<div class="note" style="margin:0;max-width:300px">Пароль не подошёл. Нажмите «Показать» и проверьте заглавные буквы и раскладку.</div>' : ''}
     <button class="btn primary" style="flex:0 0 auto;min-width:200px" ${ui.deckBusy ? 'disabled' : ''}>${ui.deckBusy ? 'Открываем…' : 'Открыть'}</button>
   </form>`;
 }
