@@ -197,6 +197,11 @@ a { color: var(--gold); }
   padding: 7px 14px; border-radius: 999px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase;
   border: 1px solid #c33a52; color: #ff9fae; background: rgba(13, 10, 12, .8);
 }
+.home-btn {
+  position: fixed; top: calc(env(safe-area-inset-top) + 10px); left: 16px; z-index: 5;
+  padding: 7px 14px; border-radius: 999px; font-size: 14px;
+  border: 1px solid var(--line); color: var(--text); background: rgba(13, 10, 12, .8);
+}
 .peek { position: fixed; inset: 0; z-index: 20; overflow: auto; background: var(--bg); padding: calc(env(safe-area-inset-top) + 16px) 16px 40px; }
 .peek .inner { max-width: 520px; margin: 0 auto; }
 

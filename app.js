@@ -6,7 +6,7 @@ const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
 const MAX_PER_GAME = 4;            // поз и действий за игру
 const FORCED_TURNS = 3;            // после «Никогда» ход у партнёра столько раз
-const HE_CHANCE = 0.6;             // доля «ОН» в стрелке
+const HE_CHANCE = 0.5;             // доля «ОН» в стрелке
 const FAV_WEIGHT = 3;
 
 // Колода приходит зашифрованной (deck.js) и заполняется после ввода пароля
@@ -41,6 +41,7 @@ function emptyState() {
     game: null,           // { start, pose, action }
     scenario: null,       // { id, leader, start }
     playing: null,        // { id, leader, start }
+    drawn: null,          // { id, from } — вытянутая карта ждёт решения
     fav: {},
     never: {},
     later: [],            // [{ id, ts, plan }]
@@ -68,7 +69,6 @@ const ui = {
   screen: 'dash',       // dash | shuffle | card | playing | settings | journal
   locked: !!state.pin,
   pinEntry: '',
-  card: null,           // { id, from: 'deck' | 'later' | 'view' }
   modal: null,
   peek: null,           // id карты, открытой поверх
   skipLater: {},        // тип → отказались от отложенного в этой игре
@@ -254,6 +254,8 @@ const actions = {
 
   // колоды
   draw(d) {
+    if (state.drawn) { ui.screen = 'card'; window.scrollTo(0, 0); return; }   // сначала решение по вытянутой
+    if (state.playing) return toast('Сначала доиграйте карту — она внизу «Карта в игре»');
     const why = canDraw(d.t);
     if (why) return toast(why);
     if (state.when === 'now' && !ui.skipLater[d.t]) {
@@ -265,14 +267,14 @@ const actions = {
     state.seen[card.id] = now(); save();
     ui.screen = 'shuffle';
     render();
-    setTimeout(() => { ui.screen = 'card'; ui.card = { id: card.id, from: 'deck' }; render(); window.scrollTo(0, 0); }, 1400);
+    setTimeout(() => { ui.screen = 'card'; state.drawn = { id: card.id, from: 'deck' }; save(); render(); window.scrollTo(0, 0); }, 1400);
     return 'norender';
   },
   pendingYes() {
     const id = ui.modal.id;
     ui.modal = null;
     ui.screen = 'card';
-    ui.card = { id, from: 'later' };
+    state.drawn = { id, from: 'later' }; save();
     window.scrollTo(0, 0);
   },
   pendingNo() {
@@ -284,7 +286,7 @@ const actions = {
 
   // решение по карте
   play() {
-    const card = byId(ui.card.id);
+    const card = byId(state.drawn.id);
     removeLater(card.id);
     if (state.when === 'next') {
       state.later.push({ id: card.id, ts: now(), plan: true });
@@ -293,7 +295,7 @@ const actions = {
       toBuy.forEach(id => { if (!state.shop.includes(id)) state.shop.push(id); });
       log(card.id, 'plan');
       endTurn(); save();
-      ui.screen = 'dash'; ui.card = null;
+      ui.screen = 'dash'; state.drawn = null; save();
       toast(toBuy.length ? 'В планах. Покупки — в списке «Купить»' : 'Запланировано на следующий раз');
       return;
     }
@@ -303,23 +305,23 @@ const actions = {
     state.playing = { id: card.id, leader: state.leader, start: now() };
     log(card.id, 'play');
     endTurn(); save();
-    ui.screen = 'playing'; ui.card = null;
+    ui.screen = 'playing'; state.drawn = null; save();
     window.scrollTo(0, 0);
     wakeLock();
   },
   later() {
-    const card = byId(ui.card.id);
+    const card = byId(state.drawn.id);
     const wasPlan = state.later.find(x => x.id === card.id)?.plan;
     removeLater(card.id);
     state.later.push({ id: card.id, ts: now(), plan: wasPlan || state.when === 'next' });
     log(card.id, 'later');
     endTurn(); save();
-    ui.screen = 'dash'; ui.card = null;
+    ui.screen = 'dash'; state.drawn = null; save();
     toast('Отложено — в следующий раз предложим первой');
   },
   never() { ui.modal = { type: 'never' }; },
   neverYes() {
-    const card = byId(ui.card.id);
+    const card = byId(state.drawn.id);
     const L = state.leader;
     state.never[card.id] = true;
     removeLater(card.id);
@@ -327,11 +329,11 @@ const actions = {
     state.forced = { who: other(L), left: FORCED_TURNS };
     state.leader = other(L);
     save();
-    ui.screen = 'dash'; ui.card = null;
+    ui.screen = 'dash'; state.drawn = null; save();
     ui.modal = { type: 'punish', who: L, reason: '«Никогда»' };
   },
   fav() {
-    const id = ui.card ? ui.card.id : ui.peek;
+    const id = ui.peek || state.drawn.id;
     if (state.fav[id]) delete state.fav[id]; else state.fav[id] = true;
     save();
   },
@@ -341,10 +343,10 @@ const actions = {
   },
   skipYes() {
     const L = state.leader;
-    log(ui.card ? ui.card.id : null, 'skip');
+    log(state.drawn ? state.drawn.id : null, 'skip');
     state.leader = other(L);
     save();
-    ui.screen = 'dash'; ui.card = null;
+    ui.screen = 'dash'; state.drawn = null; save();
     ui.modal = { type: 'punish', who: L, reason: 'пропуск хода' };
   },
 
@@ -411,6 +413,8 @@ const actions = {
 
   // навигация
   go(d) { ui.back = ui.screen; ui.screen = d.s; window.scrollTo(0, 0); },
+  openDrawn() { ui.screen = 'card'; window.scrollTo(0, 0); },
+  openPlaying() { ui.screen = 'playing'; window.scrollTo(0, 0); },
   home() { ui.screen = 'dash'; window.scrollTo(0, 0); },
   view(d) { ui.peek = d.id; },
 
@@ -496,7 +500,7 @@ function render() {
   const app = $('#app');
   if (!CARDS.length) { app.innerHTML = deckLockView(); return; }
   if (ui.locked) { app.innerHTML = lockView(); return; }
-  if (state.playing && ui.screen !== 'playing' && ui.screen !== 'journal' && ui.screen !== 'settings') ui.screen = 'playing';
+  if (ui.screen === 'card' && !state.drawn) ui.screen = 'dash';
   if (!state.playing && ui.screen === 'playing') ui.screen = 'dash';
   if (!state.seenRules && !ui.modal) ui.modal = { type: 'rules', first: true };
 
@@ -538,6 +542,23 @@ function dashView() {
       <button class="${state.when === 'now' ? 'on' : ''}" data-act="when" data-w="now">Играем сейчас</button>
       <button class="${state.when === 'next' ? 'on' : ''}" data-act="when" data-w="next">На следующий раз</button>
     </div>`;
+
+  // Незаконченное: карта в игре или вытянутая без решения
+  if (state.playing) {
+    const c = byId(state.playing.id);
+    h += `<button class="deck active" data-act="openPlaying" style="margin-top:12px">
+      <div class="sym">⏱</div>
+      <div class="tx"><div class="t">Карта в игре</div><div class="d">${TYPE[c.type].one} · ведёт ${NAME[state.playing.leader]} · вернуться</div></div>
+      <div class="cnt" data-since="${state.playing.start}">${clock(now() - state.playing.start)}</div>
+    </button>`;
+  }
+  if (state.drawn) {
+    const c = byId(state.drawn.id);
+    h += `<button class="deck active" data-act="openDrawn" style="margin-top:12px">
+      <div class="sym">${TYPE[c.type].sym}</div>
+      <div class="tx"><div class="t">Карта ждёт решения</div><div class="d">${TYPE[c.type].one} · вернуться к карте</div></div>
+    </button>`;
+  }
 
   if (!L) {
     h += `<div class="note soft">Выберите ведущего — нажмите «ОН» или «ОНА» или доверьтесь стрелке.</div>`;
@@ -647,11 +668,11 @@ function cardHtml(card, L) {
 }
 
 function cardScreen() {
-  const card = byId(ui.card.id);
+  const card = byId(state.drawn.id);
   const L = state.leader;
   const next = state.when === 'next';
-  let h = `<button class="stop-btn" data-act="stop">Стоп</button>`;
-  if (ui.card.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
+  let h = `<button class="home-btn" data-act="home">‹ Главная</button><button class="stop-btn" data-act="stop">Стоп</button>`;
+  if (state.drawn.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
   else h += `<div style="height:44px"></div>`;
   h += cardHtml(card, L);
   h += `<div class="card-actions">
@@ -670,7 +691,7 @@ function playingView() {
   const p = state.playing;
   const card = byId(p.id);
   const R = 100, C = 2 * Math.PI * R;
-  return `<button class="stop-btn" data-act="stop">Стоп</button>
+  return `<button class="home-btn" data-act="home">‹ Главная</button><button class="stop-btn" data-act="stop">Стоп</button>
   <div class="playing">
     <div class="lbl">Карта в игре · ведёт ${NAME[p.leader]}</div>
     <div class="ring">
@@ -827,7 +848,7 @@ function modalView() {
       body = `<h2>Правила</h2><p class="lead">Игра для двоих взрослых, которые доверяют друг другу. Немного дерзости, немного азарта — и никаких «давай как обычно».</p>
       <ul class="rules">
         <li>Вас двое: <b>ОН</b> и <b>ОНА</b>. Один <b>ведёт</b>, второй <b>подчиняется сценарию</b> — полностью.</li>
-        <li>Ведущего выбирает <b>стрелка</b> (у него шансы чуть выше — так интереснее) или играете <b>по очереди</b>.</li>
+        <li>Ведущего выбирает <b>стрелка</b> или играете <b>по очереди</b>.</li>
         <li>Три колоды. <b>Сценарий</b> — один на 3 часа, переиграть нельзя. <b>Позы</b> и <b>Действия</b> — до ${MAX_PER_GAME} каждого за игру. Колоды независимы: можно тянуть только действие.</li>
         <li>Выпала карта — решай: <b>Играем</b>, <b>Потом</b> (в следующий раз предложим её первой) или <b>Никогда</b> — карта исчезнет навсегда, ход уйдёт партнёру на ${FORCED_TURNS} раза, а он может показать <b>красную карточку</b>.</li>
         <li>Можно прочитать карту вслух, а можно нажать «Играем», положить телефон <b>экраном вниз</b> и устроить сюрприз. Проверить, что выпало, — потом, в журнале.</li>
@@ -927,6 +948,7 @@ function tick() {
       arc.setAttribute('stroke', k >= 1 ? '#6fae8a' : '#a8233b');
     }
   }
+  document.querySelectorAll('[data-since]').forEach(el => { el.textContent = clock(now() - +el.dataset.since); });
   document.querySelectorAll('[data-left]').forEach(el => {
     const left = GAME_MS - (now() - +el.dataset.left);
     if (left <= 0) render(); else el.textContent = clock(left);
