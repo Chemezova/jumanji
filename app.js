@@ -137,9 +137,14 @@ function cardFor(card, L) {
     steps: (card.steps || []).concat(own.steps || []),
     tips: (card.tips || []).concat(own.tips || []),
     tell: own.tell || card.tell || '',
+    order: own.order || card.order || '',
     uses: own.uses || card.uses || [],
   };
 }
+
+// Кто ведёт карту. Мазо-карта (switch) переворачивает роли: ведущий становится нижним,
+// и карту исполняет партнёр. Тексты таких карт написаны для того, кто их исполняет
+function topFor(card, L) { return card.switch ? other(L) : L; }
 
 // Фантазия, записанная на карте-джокере
 function jokerWish() {
@@ -190,7 +195,7 @@ function canDraw(type) {
 function fits(card, L) {
   if (state.never[card.id]) return false;
   if ((card.lvl || 1) > state.lvlMax) return false;
-  if (card.leaders && !card.leaders.includes(L)) return false;
+  if (card.leaders && !card.leaders.includes(topFor(card, L))) return false;
   if (state.when === 'now') {
     if (card.when === 'next') return false;
     if (missingNeeds(card).length) return false;
@@ -325,18 +330,19 @@ const actions = {
       const needs = missingNeeds(card).map(n => n.split('|')[0]);
       const toBuy = needs.concat((card.buy || []).filter(id => !hasToy(id)));
       toBuy.forEach(id => { if (!state.shop.includes(id)) state.shop.push(id); });
-      log(card.id, 'plan', jokerWish());
+      log(card.id, 'plan', Object.assign({ L: topFor(card, state.leader) }, jokerWish()));
       state.turnPlays++; save();
       ui.screen = 'dash'; state.drawn = null; save();
       toast(toBuy.length ? 'В планах. Покупки — в списке «Купить»' : 'Запланировано на следующий раз');
       return;
     }
     ensureGame();
-    if (card.type === 'scenario') state.scenario = { id: card.id, leader: state.leader, start: now() };
+    const top = topFor(card, state.leader);
+    if (card.type === 'scenario') state.scenario = { id: card.id, leader: top, start: now() };
     else state.game[card.type] = used(card.type) + 1;
     closePlaying();
-    state.playing = { id: card.id, leader: state.leader, start: now() };
-    log(card.id, 'play', jokerWish());
+    state.playing = { id: card.id, leader: top, start: now() };
+    log(card.id, 'play', Object.assign({ L: top }, jokerWish()));
     state.turnPlays++; save();
     ui.screen = 'playing'; state.drawn = null; save();
     window.scrollTo(0, 0);
@@ -353,6 +359,13 @@ const actions = {
     toast('Отложено — в следующий раз предложим первой');
   },
   never() { ui.modal = { type: 'never' }; },
+  // отказ стать нижним по мазо-карте: карта не пропадает, ведущему — красная карточка
+  refuseSwitch() {
+    const L = state.leader;
+    log(state.drawn.id, 'refuse');
+    ui.screen = 'dash'; state.drawn = null; save();
+    ui.modal = { type: 'punish', who: L, reason: 'отказ стать нижним' };
+  },
   neverYes() {
     const card = byId(state.drawn.id);
     const L = state.leader;
@@ -736,10 +749,10 @@ function ornament(type) {
 function cardHtml(card, L) {
   const t = cardFor(card, L);
   const miss = missingNeeds(card);
-  let h = `<article class="card ${card.joker ? 'joker' : ''}">
+  let h = `<article class="card ${card.joker ? 'joker' : ''} ${card.switch ? 'switch' : ''}">
     <div class="card-head">
       ${ornament(card.type)}
-      <div class="card-type"><span>${card.joker ? '★ Джокер · ' : ''}${TYPE[card.type].one}</span><span>для ведущего: ${NAME[L]}</span></div>
+      <div class="card-type"><span>${card.joker ? '★ Джокер · ' : ''}${card.switch ? '⇅ Мазо · ' : ''}${TYPE[card.type].one}</span><span>${card.switch ? 'ведёт' : 'для ведущего'}: ${NAME[L]}</span></div>
       <h1>${esc(t.title)}</h1>
       <div class="teaser">${esc(card.teaser || '')}</div>
       <div class="facts">
@@ -751,6 +764,7 @@ function cardHtml(card, L) {
     </div>
     <div class="card-body">`;
   if (t.intro) h += `<p>${esc(t.intro)}</p>`;
+  if (t.order) h += `<div class="box order"><b>Приказ — прочитай вслух</b>${esc(t.order)}</div>`;
   const toys = (card.needs || []).map(n => {
     const ok = !miss.includes(n);
     return `<span class="chip ${ok ? 'have' : 'miss'}">${n.split('|').map(toyName).map(esc).join(' или ')}${ok ? '' : ' — нет'}</span>`;
@@ -770,16 +784,22 @@ function cardScreen() {
   const card = byId(state.drawn.id);
   const L = state.leader;
   let h = `<button class="home-btn" data-act="home">‹ Главная</button><button class="stop-btn" data-act="stop">Стоп</button>`;
-  if (state.drawn.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
+  if (card.switch) h += `<div class="note switch" style="margin:40px 0 12px">⇅ Мазо-карта. В этот раз ${NAME[L]} — ${L === 'F' ? 'нижняя' : 'нижний'}: карту исполняет ${NAME[other(L)]}. Принимаешь — отдай телефон. Отказ — красная карточка.</div>`;
+  else if (state.drawn.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
   else h += `<div style="height:44px"></div>`;
-  h += cardHtml(card, L);
+  h += cardHtml(card, topFor(card, L));
   if (card.joker) h += `<div class="sec">Моя фантазия</div><textarea id="jokerWish" class="field" rows="3" placeholder="Что именно ты хочешь. Партнёр увидит это в журнале — потом"></textarea>`;
-  h += `<div class="card-actions">
+  h += card.switch
+    ? `<div class="card-actions">
+    <button class="btn primary" data-act="play">Принимаю — я ${L === 'F' ? 'нижняя' : 'нижний'}</button>
+    <button class="btn" style="grid-column:1/-1" data-act="refuseSwitch">Отказываюсь — красная карточка</button>
+  </div>`
+    : `<div class="card-actions">
     <button class="btn primary" data-act="play">Играем</button>
     <button class="btn" data-act="later">Давай потом</button>
     <button class="btn" data-act="never">Никогда</button>
-  </div>
-  <div class="card-tools">
+  </div>`;
+  h += `<div class="card-tools">
     <button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
     ${state.turnPlays ? '' : '<button class="textlink" data-act="skip">Пропустить ход</button>'}
   </div>`;
@@ -980,6 +1000,7 @@ function modalView() {
         <li>Выпала карта — решай: <b>Играем</b>, <b>Потом</b> (в следующий раз предложим её первой) или <b>Никогда</b> — карта исчезнет навсегда, ход уйдёт партнёру на ${FORCED_TURNS} раза, а он может показать <b>красную карточку</b>.</li>
         <li>Можно прочитать карту вслух, а можно нажать «Играем», положить телефон <b>экраном вниз</b> и устроить сюрприз. Проверить, что выпало, — потом, в журнале.</li>
         <li>Пропустил ход или отказался подчиняться — <b>штраф</b> на выбор партнёра.</li>
+        <li>Ведущий — <b>верхний</b>, партнёр — <b>нижний</b>. Иногда выпадает <b>мазо-карта ⇅</b>: роли меняются, и ведущий сам становится нижним. Отказ — красная карточка.</li>
         <li>Ход — это всё, что ведущий взял в игру: <b>сценарий, позы и действия складываются</b>. Закончил — «Ход сделан».</li>
         <li>🎁 Ведущий может <b>подарить ходы</b> партнёру — без штрафа, на 3–5 ходов подряд.</li>
         <li>У каждой карты есть <b>минимальное время</b>: не на отвяжись. ★ — любимые карты выпадают чаще.</li>

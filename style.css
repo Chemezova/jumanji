@@ -153,6 +153,11 @@ a { color: var(--gold); }
 .card.joker .card-head { background: linear-gradient(165deg, #4a3818 0%, #2a1a12 55%, #1a1116 100%); }
 .card.joker h1 { color: var(--gold); }
 textarea.field { resize: vertical; font: inherit; }
+.card.switch { border-color: #7b4bb3; box-shadow: 0 0 40px rgba(123, 75, 179, .2); }
+.card.switch .card-head { background: linear-gradient(165deg, #2c1a46 0%, #1a1120 70%); }
+.note.switch { background: rgba(123, 75, 179, .14); border-color: rgba(123, 75, 179, .55); }
+.box.order { background: rgba(168, 35, 59, .14); border: 1px solid rgba(195, 58, 82, .55); font-family: var(--serif); font-size: 19px; line-height: 1.4; }
+.box.order b { color: #ff9fae; font-family: var(--sans); }
 .card-body { padding: 18px 20px 22px; }
 .card-body p { margin: 0 0 14px; }
 .steps { margin: 0 0 16px; padding: 0; list-style: none; counter-reset: s; }
