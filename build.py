@@ -1,4 +1,4 @@
-# Шифрует колоду: content/cards.js -> deck.js
+# Шифрует колоду: content/cards.js + content/cards-*.js -> deck.js
 # Пароль — content/password.txt. Соль хранится в content/salt.txt и не меняется,
 # чтобы телефон, который уже ввёл пароль, не спрашивал его после каждого обновления.
 # Запуск: py build.py
@@ -26,7 +26,9 @@ salt = base64.b64decode(salt_file.read_text().strip())
 
 key = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=ITER).derive(password.encode())
 iv = os.urandom(12)
-plain = (CONTENT / 'cards.js').read_text(encoding='utf-8')
+# cards.js — основа (арсенал, штрафы, первые карты), cards-*.js — партии карт: CARDS.push(...)
+parts = [CONTENT / 'cards.js'] + sorted(CONTENT.glob('cards-*.js'))
+plain = '\n'.join(p.read_text(encoding='utf-8') for p in parts)
 data = AESGCM(key).encrypt(iv, plain.encode(), None)
 
 deck = {'salt': b64(salt), 'iv': b64(iv), 'iter': ITER, 'data': b64(data)}
