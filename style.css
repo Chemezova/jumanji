@@ -144,6 +144,10 @@ a { color: var(--gold); }
 .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .fact { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.08); }
 .ornament { position: absolute; right: -10px; top: 26px; width: 130px; height: 130px; opacity: .35; pointer-events: none; }
+.card.joker { border-color: var(--gold); box-shadow: 0 0 40px rgba(201, 164, 108, .18); }
+.card.joker .card-head { background: linear-gradient(165deg, #4a3818 0%, #2a1a12 55%, #1a1116 100%); }
+.card.joker h1 { color: var(--gold); }
+textarea.field { resize: vertical; font: inherit; }
 .card-body { padding: 18px 20px 22px; }
 .card-body p { margin: 0 0 14px; }
 .steps { margin: 0 0 16px; padding: 0; list-style: none; counter-reset: s; }

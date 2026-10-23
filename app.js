@@ -135,6 +135,12 @@ function cardFor(card, L) {
   };
 }
 
+// Фантазия, записанная на карте-джокере
+function jokerWish() {
+  const v = ($('#jokerWish') || {}).value;
+  return v && v.trim() ? { note: v.trim() } : undefined;
+}
+
 function log(id, r, extra) {
   state.log.push(Object.assign({ ts: now(), id, L: state.leader, r }, extra || {}));
   if (state.log.length > 1000) state.log.splice(0, state.log.length - 1000);
@@ -313,7 +319,7 @@ const actions = {
       const needs = missingNeeds(card).map(n => n.split('|')[0]);
       const toBuy = needs.concat((card.buy || []).filter(id => !hasToy(id)));
       toBuy.forEach(id => { if (!state.shop.includes(id)) state.shop.push(id); });
-      log(card.id, 'plan');
+      log(card.id, 'plan', jokerWish());
       state.turnPlays++; save();
       ui.screen = 'dash'; state.drawn = null; save();
       toast(toBuy.length ? 'В планах. Покупки — в списке «Купить»' : 'Запланировано на следующий раз');
@@ -324,7 +330,7 @@ const actions = {
     else state.game[card.type] = used(card.type) + 1;
     closePlaying();
     state.playing = { id: card.id, leader: state.leader, start: now() };
-    log(card.id, 'play');
+    log(card.id, 'play', jokerWish());
     state.turnPlays++; save();
     ui.screen = 'playing'; state.drawn = null; save();
     window.scrollTo(0, 0);
@@ -701,10 +707,10 @@ function ornament(type) {
 function cardHtml(card, L) {
   const t = cardFor(card, L);
   const miss = missingNeeds(card);
-  let h = `<article class="card">
+  let h = `<article class="card ${card.joker ? 'joker' : ''}">
     <div class="card-head">
       ${ornament(card.type)}
-      <div class="card-type"><span>${TYPE[card.type].one}</span><span>для ведущего: ${NAME[L]}</span></div>
+      <div class="card-type"><span>${card.joker ? '★ Джокер · ' : ''}${TYPE[card.type].one}</span><span>для ведущего: ${NAME[L]}</span></div>
       <h1>${esc(t.title)}</h1>
       <div class="teaser">${esc(card.teaser || '')}</div>
       <div class="facts">
@@ -739,6 +745,7 @@ function cardScreen() {
   if (state.drawn.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
   else h += `<div style="height:44px"></div>`;
   h += cardHtml(card, L);
+  if (card.joker) h += `<div class="sec">Моя фантазия</div><textarea id="jokerWish" class="field" rows="3" placeholder="Что именно ты хочешь. Партнёр увидит это в журнале — потом"></textarea>`;
   h += `<div class="card-actions">
     <button class="btn primary" data-act="play">${next ? 'Играем в следующий раз' : 'Играем'}</button>
     <button class="btn" data-act="later">Давай потом</button>
@@ -862,7 +869,7 @@ function journalView() {
     const dur = e.dur ? ` · ${Math.round(e.dur / MIN)} мин` : '';
     return `${head}<li ${c ? `data-act="view" data-id="${c.id}"` : ''}>
       <span>${c ? TYPE[c.type].sym : e.r === 'gift' ? '🎁' : '✕'}</span>
-      <div class="grow"><div>${title}</div><div class="meta">${hm(e.ts)} · ${e.r === 'punish' ? 'штраф для' : 'ведёт'} ${NAME[e.L] || '—'}${dur}</div></div>
+      <div class="grow"><div>${title}</div>${c && e.note ? `<div class="meta">«${esc(e.note)}»</div>` : ''}<div class="meta">${hm(e.ts)} · ${e.r === 'punish' ? 'штраф для' : 'ведёт'} ${NAME[e.L] || '—'}${dur}</div></div>
       <span class="res ${e.r}">${RESULT[e.r] || e.r}</span></li>`;
   }).join('') + '</ul>';
   return h;
