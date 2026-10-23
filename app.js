@@ -381,7 +381,10 @@ const actions = {
 
   // идёт игра
   peek(d) { ui.peek = d.id; },
-  peekClose() { ui.peek = null; },
+  peekClose() { ui.peek = null; ui.deckFor = null; },
+  deckType(d) { ui.deckType = d.t; },
+  deckLead(d) { ui.deckLead = d.l; },
+  deckView(d) { ui.peek = d.id; ui.deckFor = ui.deckLead || 'M'; },
   done() {
     const p = state.playing;
     const card = byId(p.id);
@@ -560,7 +563,7 @@ function render() {
   if (!state.playing && ui.screen === 'playing') ui.screen = 'dash';
   if (!state.seenRules && !ui.modal) ui.modal = { type: 'rules', first: true };
 
-  const views = { dash: dashView, shuffle: shuffleView, card: cardScreen, playing: playingView, settings: settingsView, journal: journalView };
+  const views = { dash: dashView, shuffle: shuffleView, card: cardScreen, playing: playingView, settings: settingsView, journal: journalView, deck: deckView };
   app.innerHTML = (views[ui.screen] || dashView)() + (ui.peek ? peekView() : '') + modalView();
 }
 
@@ -569,6 +572,7 @@ function topBar() {
     <div class="logo">ДЖУМАНДЖИ<b>·</b></div>
     <div class="icons">
       <button class="ic" data-act="rules" aria-label="Правила">?</button>
+      <button class="ic" data-act="go" data-s="deck" aria-label="Все карты">❖</button>
       <button class="ic" data-act="go" data-s="journal" aria-label="Журнал">☰</button>
       <button class="ic" data-act="go" data-s="settings" aria-label="Настройки">⚙</button>
     </div>
@@ -793,7 +797,7 @@ function peekView() {
   const card = byId(ui.peek);
   const sc = state.scenario && state.scenario.id === card.id ? state.scenario.leader : null;
   const pl = state.playing && state.playing.id === card.id ? state.playing.leader : null;
-  const L = sc || pl || state.leader || 'M';
+  const L = ui.deckFor || sc || pl || state.leader || 'M';
   return `<div class="peek"><div class="inner">
     <button class="back" data-act="peekClose">‹ Закрыть</button>
     ${cardHtml(card, L)}
@@ -853,6 +857,25 @@ function settingsView() {
       <button class="btn ghost" data-act="resetGame">Сбросить текущую игру</button>
     </div></div>`;
   return h;
+}
+
+// Вся колода: просмотр любой карты в версии для ведущего ОН или ОНА
+function deckView() {
+  const t = ui.deckType || 'scenario';
+  const lead = ui.deckLead || 'M';
+  const list = CARDS.filter(c => c.type === t && (!c.leaders || c.leaders.includes(lead)));
+  let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Колода</h1>
+    <p class="lead" style="color:var(--muted);margin:0">Всего карт: ${CARDS.length}. Нажмите на карту, чтобы открыть её целиком.</p>
+    <div class="seg">${Object.keys(TYPE).map(k => `<button class="${t === k ? 'on' : ''}" data-act="deckType" data-t="${k}">${TYPE[k].many} · ${CARDS.filter(c => c.type === k).length}</button>`).join('')}</div>
+    <div class="seg"><button class="${lead === 'M' ? 'on' : ''}" data-act="deckLead" data-l="M">Ведёт ОН</button><button class="${lead === 'F' ? 'on' : ''}" data-act="deckLead" data-l="F">Ведёт ОНА</button></div>
+    <ul class="list" style="margin-top:12px">`;
+  h += list.map(c => `<li data-act="deckView" data-id="${c.id}">
+      <span>${c.joker ? '★' : TYPE[c.type].sym}</span>
+      <div class="grow"><div>${esc(cardFor(c, lead).title)}${state.never[c.id] ? ' <span class="res never">никогда</span>' : ''}</div>
+        <div class="meta">${esc(c.teaser || '')}</div></div>
+      <span class="meta" style="white-space:nowrap">${peppers(c.lvl || 1)} ${c.min}′</span>
+    </li>`).join('');
+  return h + '</ul>';
 }
 
 function journalView() {
