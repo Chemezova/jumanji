@@ -119,6 +119,12 @@ function plural(n, one, few, many) {
 }
 function turns(n) { return `${n} ${plural(n, 'ход', 'хода', 'ходов')}`; }
 const fixedWhy = f => (f.gift ? 'ходы подарены' : 'штраф за «Никогда»');
+// Минимальное время карты: 40 мин, 2 ч, 1 сутки
+function duration(min, short) {
+  if (min >= 1440) return `${Math.round(min / 1440)} ${short ? 'сут' : plural(Math.round(min / 1440), 'сутки', 'суток', 'суток')}`;
+  if (min >= 120 && min % 60 === 0) return `${min / 60} ч`;
+  return short ? `${min}′` : `${min} мин`;
+}
 function peppers(n) { return '🌶'.repeat(n); }
 
 // Текст карточки под ведущего: заголовок, вступление, подсказка и игрушки заменяются,
@@ -719,7 +725,7 @@ function cardHtml(card, L) {
       <div class="teaser">${esc(card.teaser || '')}</div>
       <div class="facts">
         <span class="fact">${peppers(card.lvl || 1)}</span>
-        <span class="fact">⏱ от ${card.min} мин</span>
+        <span class="fact">⏱ от ${duration(card.min)}</span>
         ${card.when === 'next' ? '<span class="fact">на следующий раз</span>' : ''}
         ${state.fav[card.id] ? '<span class="fact">★ любимая</span>' : ''}
       </div>
@@ -775,7 +781,7 @@ function playingView() {
         <circle id="ringArc" cx="110" cy="110" r="${R}" fill="none" stroke="#a8233b" stroke-width="4" stroke-linecap="round"
           stroke-dasharray="${C}" stroke-dashoffset="${C}"/>
       </svg>
-      <div class="time"><b id="elapsed">00:00</b><small>минимум ${card.min} мин</small></div>
+      <div class="time"><b id="elapsed">00:00</b><small>минимум ${duration(card.min)}</small></div>
     </div>
     <p class="lbl" style="max-width:280px;line-height:1.6;text-transform:none;letter-spacing:0;font-size:14px">
       Положите телефон экраном вниз. Что выпало — знает только ведущий.</p>
@@ -873,7 +879,7 @@ function deckView() {
       <span>${c.joker ? '★' : TYPE[c.type].sym}</span>
       <div class="grow"><div>${esc(cardFor(c, lead).title)}${state.never[c.id] ? ' <span class="res never">никогда</span>' : ''}</div>
         <div class="meta">${esc(c.teaser || '')}</div></div>
-      <span class="meta" style="white-space:nowrap">${peppers(c.lvl || 1)} ${c.min}′</span>
+      <span class="meta" style="white-space:nowrap">${peppers(c.lvl || 1)} ${duration(c.min, true)}</span>
     </li>`).join('');
   return h + '</ul>';
 }
@@ -1010,7 +1016,7 @@ function modalView() {
 
     case 'early': {
       const c = byId(state.playing.id);
-      body = `<h2>Уже всё?</h2><p class="lead">Прошло ${Math.floor((now() - state.playing.start) / MIN)} мин из минимальных ${c.min}. Карта рассчитана на большее.</p>
+      body = `<h2>Уже всё?</h2><p class="lead">Прошло ${Math.floor((now() - state.playing.start) / MIN)} мин из минимальных ${duration(c.min)}. Карта рассчитана на большее.</p>
       <div class="btns"><button class="btn primary" data-act="closeModal">Продолжаем</button><button class="btn ghost" data-act="done">Да, закончили</button></div>`;
       break;
     }
