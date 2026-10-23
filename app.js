@@ -37,11 +37,12 @@ function emptyState() {
     pickMode: 'random',   // random | turns
     when: 'now',          // now | next
     leader: null,         // M | F
-    forced: null,         // { who, left, gift, note } — ходы закреплены: штраф за «Никогда» или подарок
+    forced: null,         // { who, left, gift } — ходы закреплены: штраф за «Никогда» или подарок
     game: null,           // { start, pose, action }
     scenario: null,       // { id, leader, start }
     playing: null,        // { id, leader, start }
     drawn: null,          // { id, from } — вытянутая карта ждёт решения
+    turnPlays: 0,         // сколько карт взято в игру за текущий ход
     fav: {},
     never: {},
     later: [],            // [{ id, ts, plan }]
@@ -211,14 +212,26 @@ function pendingFor(type) {
   });
 }
 
-// Ход закончился: после «Никогда» счётчик идёт вниз, в режиме «по очереди» ведущий меняется
+// Ход — это всё, что ведущий взял в игру: сценарий, позы, действия вместе.
+// Ход закончился: закреплённые ходы (штраф, подарок) идут вниз,
+// «по очереди» ведущий меняется, со стрелкой — крутим заново
 function endTurn() {
+  state.turnPlays = 0;
   if (state.forced) {
     state.forced.left--;
     if (state.forced.left > 0) { state.leader = state.forced.who; return; }
     state.forced = null;
   }
   if (state.pickMode === 'turns' && state.leader) state.leader = other(state.leader);
+  else state.leader = null;
+}
+
+// Закрыть карту, которая шла, — когда ведущий берёт следующую
+function closePlaying() {
+  const p = state.playing;
+  if (!p) return;
+  state.log.push({ ts: now(), id: p.id, L: p.leader, r: 'done', dur: now() - p.start });
+  state.playing = null;
 }
 
 function removeLater(id) { state.later = state.later.filter(x => x.id !== id); }
@@ -263,7 +276,6 @@ const actions = {
   // колоды
   draw(d) {
     if (state.drawn) { ui.screen = 'card'; window.scrollTo(0, 0); return; }   // сначала решение по вытянутой
-    if (state.playing) return toast('Сначала доиграйте карту — она внизу «Карта в игре»');
     const why = canDraw(d.t);
     if (why) return toast(why);
     if (state.when === 'now' && !ui.skipLater[d.t]) {
@@ -302,7 +314,7 @@ const actions = {
       const toBuy = needs.concat((card.buy || []).filter(id => !hasToy(id)));
       toBuy.forEach(id => { if (!state.shop.includes(id)) state.shop.push(id); });
       log(card.id, 'plan');
-      endTurn(); save();
+      state.turnPlays++; save();
       ui.screen = 'dash'; state.drawn = null; save();
       toast(toBuy.length ? 'В планах. Покупки — в списке «Купить»' : 'Запланировано на следующий раз');
       return;
@@ -310,9 +322,10 @@ const actions = {
     ensureGame();
     if (card.type === 'scenario') state.scenario = { id: card.id, leader: state.leader, start: now() };
     else state.game[card.type] = used(card.type) + 1;
+    closePlaying();
     state.playing = { id: card.id, leader: state.leader, start: now() };
     log(card.id, 'play');
-    endTurn(); save();
+    state.turnPlays++; save();
     ui.screen = 'playing'; state.drawn = null; save();
     window.scrollTo(0, 0);
     wakeLock();
@@ -323,7 +336,7 @@ const actions = {
     removeLater(card.id);
     state.later.push({ id: card.id, ts: now(), plan: wasPlan || state.when === 'next' });
     log(card.id, 'later');
-    endTurn(); save();
+    save();
     ui.screen = 'dash'; state.drawn = null; save();
     toast('Отложено — в следующий раз предложим первой');
   },
@@ -336,6 +349,7 @@ const actions = {
     log(card.id, 'never');
     state.forced = { who: other(L), left: FORCED_TURNS };
     state.leader = other(L);
+    state.turnPlays = 0;
     save();
     ui.screen = 'dash'; state.drawn = null; save();
     ui.modal = { type: 'punish', who: L, reason: '«Никогда»' };
@@ -353,6 +367,7 @@ const actions = {
     const L = state.leader;
     log(state.drawn ? state.drawn.id : null, 'skip');
     state.leader = other(L);
+    state.turnPlays = 0;
     save();
     ui.screen = 'dash'; state.drawn = null; save();
     ui.modal = { type: 'punish', who: L, reason: 'пропуск хода' };
@@ -413,7 +428,7 @@ const actions = {
   viewScenario() { ui.peek = state.scenario.id; },
   endGame() { ui.modal = { type: 'endGame' }; },
   endGameYes() {
-    state.game = null; ui.skipLater = {};
+    state.game = null; state.turnPlays = 0; ui.skipLater = {};
     if (state.pickMode === 'random' && !state.forced) state.leader = null;
     save(); ui.modal = null;
     toast('Игра завершена. Сценарий держится до конца трёх часов');
@@ -466,34 +481,32 @@ const actions = {
   delPin() { state.pin = ''; save(); toast('Код снят'); },
   resetGame() { ui.modal = { type: 'resetGame' }; },
   resetGameYes() {
-    Object.assign(state, { leader: null, forced: null, game: null, scenario: null, playing: null });
+    Object.assign(state, { leader: null, forced: null, game: null, scenario: null, playing: null, drawn: null, turnPlays: 0 });
     ui.skipLater = {};
     save(); ui.modal = null; toast('Текущая игра сброшена');
   },
 
   // подарок ходов
+  // ведущий сам отдаёт ход партнёру — без штрафа, сразу на несколько ходов подряд
   gift() {
-    if (state.forced && !state.forced.gift) return toast('Сначала отыграйте штраф за «Никогда»');
-    const who = state.forced ? state.forced.who : (state.leader ? other(state.leader) : 'M');
-    ui.modal = { type: 'gift', who, n: 3, note: '' };
+    if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
+    ui.modal = { type: 'gift', n: 3 };
   },
-  giftSet(d) {
-    ui.modal.note = $('#giftNote').value;
-    if (d.who) ui.modal.who = d.who;
-    if (d.n) ui.modal.n = Math.max(1, Math.min(20, ui.modal.n + +d.n));
-  },
+  giftSet(d) { ui.modal.n = +d.n; },
   giftYes() {
-    const m = ui.modal;
-    const note = $('#giftNote').value.trim();
-    const f = state.forced;
-    if (f && f.gift && f.who !== m.who) return toast(`Сначала закончится подарок для ${NAME[f.who]}`);
-    if (f && f.gift) { f.left += m.n; if (note) f.note = note; }
-    else state.forced = { who: m.who, left: m.n, gift: true, note };
-    state.leader = m.who;
-    state.log.push({ ts: now(), id: null, L: m.who, r: 'gift', note: `${turns(m.n)} в подарок${note ? ' — ' + note : ''}` });
+    const to = other(state.leader);
+    const n = ui.modal.n;
+    state.forced = { who: to, left: n, gift: true };
+    state.leader = to;
+    state.turnPlays = 0;
+    state.log.push({ ts: now(), id: null, L: to, r: 'gift', note: `${turns(n)} в подарок` });
     save();
     ui.modal = null;
-    toast(`🎁 ${NAME[m.who]} ведёт следующие ${turns(state.forced.left)}`);
+    toast(`🎁 ${NAME[to]} ведёт следующие ${turns(n)}`);
+  },
+  turnDone() {
+    endTurn(); save();
+    toast(state.leader ? `Ход переходит: ведёт ${NAME[state.leader]}` : 'Ход сделан. Крутите стрелку заново');
   },
   giftEnd() {
     state.forced = null; save();
@@ -568,13 +581,12 @@ function dashView() {
   h += `<div class="players">${player('M')}${player('F')}</div>`;
   h += `<div class="who-row">
       <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''}>➶ Кто сегодня главный?</button>
-      <button class="btn small" data-act="gift" aria-label="Подарить ходы">🎁</button>
     </div>`;
   h += `<div class="seg">
       <button class="${state.pickMode === 'random' ? 'on' : ''}" data-act="pickMode" data-m="random">Стрелка</button>
       <button class="${state.pickMode === 'turns' ? 'on' : ''}" data-act="pickMode" data-m="turns">По очереди</button>
     </div>`;
-  if (f && f.gift) h += `<div class="note gift">🎁 ${f.note ? esc(f.note) + ': в' : 'В'}едёт ${NAME[f.who]} — ещё ${turns(f.left)}.
+  if (f && f.gift) h += `<div class="note gift">🎁 Ходы в подарок: ведёт ${NAME[f.who]} — ещё ${turns(f.left)}.
       <button class="textlink" style="padding:4px 0 0;display:block" data-act="giftEnd">Закончить подарок раньше</button></div>`;
   else if (f) h += `<div class="note">Штраф за «Никогда»: ведёт ${NAME[f.who]} — ещё ${turns(f.left)}.</div>`;
 
@@ -606,7 +618,8 @@ function dashView() {
   }
 
   h += `<div class="zone-title"><h2>Ведёт <span class="lead-${L}">${NAME[L]}</span></h2>
-    <button class="textlink" data-act="skip">Пропустить ход</button></div>`;
+    ${f ? '' : '<button class="textlink" data-act="gift">🎁 Подарить ходы</button>'}</div>
+    <p class="hint-line">Сценарий, позы и действия складываются — можно всё вместе за один ход.</p>`;
 
   // Сценарий
   const sc = state.scenario;
@@ -623,6 +636,9 @@ function dashView() {
   }
   h += deckBtn('pose', state.when === 'now' ? `${used('pose')} / ${MAX_PER_GAME}` : '');
   h += deckBtn('action', state.when === 'now' ? `${used('action')} / ${MAX_PER_GAME}` : '');
+  h += state.turnPlays
+    ? `<div class="who-row"><button class="btn" data-act="turnDone">Ход сделан — ${turnDoneText()}</button></div>`
+    : f ? '' : `<div class="who-row"><button class="btn ghost small" data-act="skip">Пропустить ход (штраф)</button></div>`;
 
   // Отложенное
   if (state.later.length) {
@@ -647,6 +663,14 @@ function dashView() {
     h += `<div class="who-row"><button class="btn ghost small" data-act="endGame">Завершить игру</button></div>`;
   }
   return h;
+}
+
+// Что будет после «Ход сделан»
+function turnDoneText() {
+  const f = state.forced;
+  if (f && f.left > 1) return `ведёт ${NAME[f.who]}, ещё ${turns(f.left - 1)}`;
+  if (state.pickMode === 'turns') return `ход ${f ? NAME[other(f.who)] : NAME[other(state.leader)]}`;
+  return 'крутим стрелку';
 }
 
 function deckBtn(type, cnt) {
@@ -722,7 +746,7 @@ function cardScreen() {
   </div>
   <div class="card-tools">
     <button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
-    <button class="textlink" data-act="skip">Пропустить ход</button>
+    ${state.turnPlays ? '' : '<button class="textlink" data-act="skip">Пропустить ход</button>'}
   </div>`;
   return h;
 }
@@ -749,6 +773,12 @@ function playingView() {
       <button class="btn primary" data-act="done">Сыграли</button>
       <button class="btn ghost" data-act="refused">${NAME[other(p.leader)]} отказывается подчиняться</button>
     </div>
+    <div class="sec" style="margin-bottom:0">Добавить к игре</div>
+    <div class="who-row" style="width:100%;margin-top:0">
+      ${state.scenario ? '' : '<button class="btn small" style="flex:1" data-act="draw" data-t="scenario">+ Сценарий</button>'}
+      <button class="btn small" style="flex:1" data-act="draw" data-t="pose">+ Поза</button>
+      <button class="btn small" style="flex:1" data-act="draw" data-t="action">+ Действие</button>
+    </div>
   </div>`;
 }
 
@@ -767,13 +797,14 @@ function peekView() {
 function settingsView() {
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Настройки</h1>`;
 
-  h += `<div class="set-sec"><h2>Арсенал</h2><p class="lead">Что у вас есть. Карты с недостающими игрушками в «Сейчас» не выпадают — только «на следующий раз».</p><ul class="list">`;
-  h += allToys().map(t => `<li>
-      <span class="grow">${esc(t.name)}</span>
+  h += `<div class="set-sec"><h2>Арсенал</h2><p class="lead">Что у вас есть: ${allToys().filter(t => hasToy(t.id)).length} из ${allToys().length}. Карты с недостающими игрушками в «Сейчас» не выпадают — только «на следующий раз».</p>`;
+  const cats = [...new Set(allToys().map(t => t.cat || 'Свои'))];
+  h += cats.map(cat => `<div class="sec">${esc(cat)}</div><ul class="list">${allToys().filter(t => (t.cat || 'Свои') === cat).map(t => `<li>
+      <span class="grow">${esc(t.name)}${t.hint ? `<div class="meta">${esc(t.hint)}</div>` : ''}</span>
       ${t.id.startsWith('my-') ? `<button class="x" data-act="delToy" data-id="${t.id}">убрать</button>` : ''}
       <button class="toggle ${hasToy(t.id) ? 'on' : ''}" data-act="toy" data-id="${t.id}" aria-label="${esc(t.name)}"></button>
-    </li>`).join('');
-  h += `</ul><div class="addrow"><input id="newToy" class="field" placeholder="Своя игрушка"><button class="btn small" data-act="addToy">Добавить</button></div></div>`;
+    </li>`).join('')}</ul>`).join('');
+  h += `<div class="addrow"><input id="newToy" class="field" placeholder="Своя игрушка"><button class="btn small" data-act="addToy">Добавить</button></div></div>`;
 
   h += `<div class="set-sec"><h2>Купить</h2><p class="lead">Сюда попадают покупки из карт «на следующий раз». Купили — игрушка уходит в арсенал.</p>`;
   h += state.shop.length
@@ -893,7 +924,8 @@ function modalView() {
         <li>Выпала карта — решай: <b>Играем</b>, <b>Потом</b> (в следующий раз предложим её первой) или <b>Никогда</b> — карта исчезнет навсегда, ход уйдёт партнёру на ${FORCED_TURNS} раза, а он может показать <b>красную карточку</b>.</li>
         <li>Можно прочитать карту вслух, а можно нажать «Играем», положить телефон <b>экраном вниз</b> и устроить сюрприз. Проверить, что выпало, — потом, в журнале.</li>
         <li>Пропустил ход или отказался подчиняться — <b>штраф</b> на выбор партнёра.</li>
-        <li>🎁 Ходы можно <b>подарить</b> — на день рождения или просто так: партнёр ведёт несколько раз подряд.</li>
+        <li>Ход — это всё, что ведущий взял в игру: <b>сценарий, позы и действия складываются</b>. Закончил — «Ход сделан».</li>
+        <li>🎁 Ведущий может <b>подарить ходы</b> партнёру — без штрафа, на 3–5 ходов подряд.</li>
         <li>У каждой карты есть <b>минимальное время</b>: не на отвяжись. ★ — любимые карты выпадают чаще.</li>
         <li><b>Стоп-слово сильнее любых правил.</b> Прозвучало — останавливаетесь сразу, без штрафов и вопросов.</li>
       </ul>
@@ -959,20 +991,11 @@ function modalView() {
       break;
 
     case 'gift':
-      body = `<h2>Подарить ходы</h2><p class="lead">День рождения, годовщина или просто так: подарок ведёт подряд столько ходов, сколько подарили. Стрелка и очередь на это время отдыхают.</p>
-      <div class="sec">Кому</div>
-      <div class="seg" style="margin-top:0">
-        <button class="${m.who === 'M' ? 'on' : ''}" data-act="giftSet" data-who="M">ЕМУ</button>
-        <button class="${m.who === 'F' ? 'on' : ''}" data-act="giftSet" data-who="F">ЕЙ</button>
-      </div>
+      body = `<h2>Подарить ходы</h2><p class="lead">${NAME[state.leader]} отдаёт ход без штрафа. ${NAME[other(state.leader)]} ведёт несколько ходов подряд и сам${state.leader === 'M' ? 'а' : ''} тянет карты. Стрелка и очередь на это время отдыхают.</p>
       <div class="sec">Сколько ходов</div>
-      <div class="stepper">
-        <button class="btn small" data-act="giftSet" data-n="-1">−</button>
-        <b>${m.n}</b>
-        <button class="btn small" data-act="giftSet" data-n="1">+</button>
+      <div class="seg" style="margin-top:0">
+        ${[3, 4, 5].map(n => `<button class="${m.n === n ? 'on' : ''}" data-act="giftSet" data-n="${n}">${n}</button>`).join('')}
       </div>
-      <div class="sec">Повод</div>
-      <input id="giftNote" class="field" style="margin-top:0" placeholder="Например: День рождения" value="${esc(m.note)}">
       <div class="btns"><button class="btn primary" data-act="giftYes">Подарить ${turns(m.n)}</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
       break;
 

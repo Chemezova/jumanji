@@ -83,9 +83,7 @@ a { color: var(--gold); }
   background: rgba(168, 35, 59, .12); border: 1px solid rgba(168, 35, 59, .4);
 }
 .note.gift { background: rgba(201, 164, 108, .1); border-color: rgba(201, 164, 108, .45); }
-.stepper { display: flex; align-items: center; gap: 18px; }
-.stepper b { font-family: var(--serif); font-size: 32px; font-weight: 400; min-width: 40px; text-align: center; }
-.stepper .btn { width: 52px; font-size: 22px; }
+.hint-line { color: var(--muted); font-size: 13px; margin: -4px 0 12px; }
 .note.soft { background: var(--surface); border-color: var(--line); color: var(--muted); }
 
 /* ---------- Зона ведущего ---------- */
