@@ -750,14 +750,13 @@ function cardHtml(card, L) {
 function cardScreen() {
   const card = byId(state.drawn.id);
   const L = state.leader;
-  const next = state.when === 'next';
   let h = `<button class="home-btn" data-act="home">‹ Главная</button><button class="stop-btn" data-act="stop">Стоп</button>`;
   if (state.drawn.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
   else h += `<div style="height:44px"></div>`;
   h += cardHtml(card, L);
   if (card.joker) h += `<div class="sec">Моя фантазия</div><textarea id="jokerWish" class="field" rows="3" placeholder="Что именно ты хочешь. Партнёр увидит это в журнале — потом"></textarea>`;
   h += `<div class="card-actions">
-    <button class="btn primary" data-act="play">${next ? 'Играем в следующий раз' : 'Играем'}</button>
+    <button class="btn primary" data-act="play">Играем</button>
     <button class="btn" data-act="later">Давай потом</button>
     <button class="btn" data-act="never">Никогда</button>
   </div>
