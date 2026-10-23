@@ -20,7 +20,7 @@ const TYPE = {
 };
 const RESULT = {
   play: 'начали', plan: 'в планы', later: 'потом', never: 'никогда', skip: 'пропуск хода',
-  punish: 'штраф', refuse: 'отказ', stop: 'стоп-слово', done: 'сыграли',
+  punish: 'штраф', gift: 'подарок', refuse: 'отказ', stop: 'стоп-слово', done: 'сыграли',
 };
 
 // ---------- Хранилище ----------
@@ -37,7 +37,7 @@ function emptyState() {
     pickMode: 'random',   // random | turns
     when: 'now',          // now | next
     leader: null,         // M | F
-    forced: null,         // { who, left }
+    forced: null,         // { who, left, gift, note } — ходы закреплены: штраф за «Никогда» или подарок
     game: null,           // { start, pose, action }
     scenario: null,       // { id, leader, start }
     playing: null,        // { id, leader, start }
@@ -110,6 +110,14 @@ function dayName(ts) {
   if (same(d, t)) return 'Вчера';
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
+function plural(n, one, few, many) {
+  const a = n % 10, b = n % 100;
+  if (a === 1 && b !== 11) return one;
+  if (a >= 2 && a <= 4 && (b < 12 || b > 14)) return few;
+  return many;
+}
+function turns(n) { return `${n} ${plural(n, 'ход', 'хода', 'ходов')}`; }
+const fixedWhy = f => (f.gift ? 'ходы подарены' : 'штраф за «Никогда»');
 function peppers(n) { return '🌶'.repeat(n); }
 
 // Текст карточки под ведущего: заголовок, вступление, подсказка и игрушки заменяются,
@@ -224,13 +232,13 @@ const actions = {
 
   // ведущий
   pickLeader(d) {
-    if (state.forced) return toast(`Ход у ${state.forced.who === 'M' ? 'него' : 'неё'} — после «Никогда» это не меняется`);
+    if (state.forced) return toast(`Ход у ${state.forced.who === 'M' ? 'него' : 'неё'}: ${fixedWhy(state.forced)}`);
     state.leader = d.l; save();
   },
   pickMode(d) { state.pickMode = d.m; save(); },
   when(d) { state.when = d.w; save(); },
   spin() {
-    if (state.forced) return toast('Сейчас ход определён штрафом');
+    if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'spin', result: null };
   },
   spinGo() {
@@ -338,7 +346,7 @@ const actions = {
     save();
   },
   skip() {
-    if (state.forced) return toast('Сейчас пропустить нельзя — ход определён штрафом');
+    if (state.forced) return toast(`Сейчас пропустить нельзя: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'skip' };
   },
   skipYes() {
@@ -463,6 +471,35 @@ const actions = {
     save(); ui.modal = null; toast('Текущая игра сброшена');
   },
 
+  // подарок ходов
+  gift() {
+    if (state.forced && !state.forced.gift) return toast('Сначала отыграйте штраф за «Никогда»');
+    const who = state.forced ? state.forced.who : (state.leader ? other(state.leader) : 'M');
+    ui.modal = { type: 'gift', who, n: 3, note: '' };
+  },
+  giftSet(d) {
+    ui.modal.note = $('#giftNote').value;
+    if (d.who) ui.modal.who = d.who;
+    if (d.n) ui.modal.n = Math.max(1, Math.min(20, ui.modal.n + +d.n));
+  },
+  giftYes() {
+    const m = ui.modal;
+    const note = $('#giftNote').value.trim();
+    const f = state.forced;
+    if (f && f.gift && f.who !== m.who) return toast(`Сначала закончится подарок для ${NAME[f.who]}`);
+    if (f && f.gift) { f.left += m.n; if (note) f.note = note; }
+    else state.forced = { who: m.who, left: m.n, gift: true, note };
+    state.leader = m.who;
+    state.log.push({ ts: now(), id: null, L: m.who, r: 'gift', note: `${turns(m.n)} в подарок${note ? ' — ' + note : ''}` });
+    save();
+    ui.modal = null;
+    toast(`🎁 ${NAME[m.who]} ведёт следующие ${turns(state.forced.left)}`);
+  },
+  giftEnd() {
+    state.forced = null; save();
+    toast('Подарок закончен — ходы снова по обычным правилам');
+  },
+
   // пароль к колоде
   unlockDeck() {
     const pw = $('#deckPw').value;
@@ -531,12 +568,15 @@ function dashView() {
   h += `<div class="players">${player('M')}${player('F')}</div>`;
   h += `<div class="who-row">
       <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''}>➶ Кто сегодня главный?</button>
+      <button class="btn small" data-act="gift" aria-label="Подарить ходы">🎁</button>
     </div>`;
   h += `<div class="seg">
       <button class="${state.pickMode === 'random' ? 'on' : ''}" data-act="pickMode" data-m="random">Стрелка</button>
       <button class="${state.pickMode === 'turns' ? 'on' : ''}" data-act="pickMode" data-m="turns">По очереди</button>
     </div>`;
-  if (f) h += `<div class="note">Штраф за «Никогда»: ведёт ${NAME[f.who]} — ещё ${f.left} ${f.left === 1 ? 'ход' : 'хода'}.</div>`;
+  if (f && f.gift) h += `<div class="note gift">🎁 ${f.note ? esc(f.note) + ': в' : 'В'}едёт ${NAME[f.who]} — ещё ${turns(f.left)}.
+      <button class="textlink" style="padding:4px 0 0;display:block" data-act="giftEnd">Закончить подарок раньше</button></div>`;
+  else if (f) h += `<div class="note">Штраф за «Никогда»: ведёт ${NAME[f.who]} — ещё ${turns(f.left)}.</div>`;
 
   h += `<div class="seg">
       <button class="${state.when === 'now' ? 'on' : ''}" data-act="when" data-w="now">Играем сейчас</button>
@@ -790,7 +830,7 @@ function journalView() {
     const title = c ? esc(cardFor(c, e.L || 'M').title) : esc(e.note || '');
     const dur = e.dur ? ` · ${Math.round(e.dur / MIN)} мин` : '';
     return `${head}<li ${c ? `data-act="view" data-id="${c.id}"` : ''}>
-      <span>${c ? TYPE[c.type].sym : '✕'}</span>
+      <span>${c ? TYPE[c.type].sym : e.r === 'gift' ? '🎁' : '✕'}</span>
       <div class="grow"><div>${title}</div><div class="meta">${hm(e.ts)} · ${e.r === 'punish' ? 'штраф для' : 'ведёт'} ${NAME[e.L] || '—'}${dur}</div></div>
       <span class="res ${e.r}">${RESULT[e.r] || e.r}</span></li>`;
   }).join('') + '</ul>';
@@ -853,6 +893,7 @@ function modalView() {
         <li>Выпала карта — решай: <b>Играем</b>, <b>Потом</b> (в следующий раз предложим её первой) или <b>Никогда</b> — карта исчезнет навсегда, ход уйдёт партнёру на ${FORCED_TURNS} раза, а он может показать <b>красную карточку</b>.</li>
         <li>Можно прочитать карту вслух, а можно нажать «Играем», положить телефон <b>экраном вниз</b> и устроить сюрприз. Проверить, что выпало, — потом, в журнале.</li>
         <li>Пропустил ход или отказался подчиняться — <b>штраф</b> на выбор партнёра.</li>
+        <li>🎁 Ходы можно <b>подарить</b> — на день рождения или просто так: партнёр ведёт несколько раз подряд.</li>
         <li>У каждой карты есть <b>минимальное время</b>: не на отвяжись. ★ — любимые карты выпадают чаще.</li>
         <li><b>Стоп-слово сильнее любых правил.</b> Прозвучало — останавливаетесь сразу, без штрафов и вопросов.</li>
       </ul>
@@ -915,6 +956,24 @@ function modalView() {
     case 'stop':
       body = `<h2>Пауза</h2><p class="lead">Стоп-слово — без штрафов и без вопросов. Выдохните, попейте воды, обнимитесь. Если что-то задело — скажите об этом сейчас, а не завтра.</p>
       <div class="btns"><button class="btn primary" data-act="stopGoOn">Всё хорошо, продолжаем</button><button class="btn" data-act="stopEnd">Заканчиваем на сегодня</button></div>`;
+      break;
+
+    case 'gift':
+      body = `<h2>Подарить ходы</h2><p class="lead">День рождения, годовщина или просто так: подарок ведёт подряд столько ходов, сколько подарили. Стрелка и очередь на это время отдыхают.</p>
+      <div class="sec">Кому</div>
+      <div class="seg" style="margin-top:0">
+        <button class="${m.who === 'M' ? 'on' : ''}" data-act="giftSet" data-who="M">ЕМУ</button>
+        <button class="${m.who === 'F' ? 'on' : ''}" data-act="giftSet" data-who="F">ЕЙ</button>
+      </div>
+      <div class="sec">Сколько ходов</div>
+      <div class="stepper">
+        <button class="btn small" data-act="giftSet" data-n="-1">−</button>
+        <b>${m.n}</b>
+        <button class="btn small" data-act="giftSet" data-n="1">+</button>
+      </div>
+      <div class="sec">Повод</div>
+      <input id="giftNote" class="field" style="margin-top:0" placeholder="Например: День рождения" value="${esc(m.note)}">
+      <div class="btns"><button class="btn primary" data-act="giftYes">Подарить ${turns(m.n)}</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
       break;
 
     case 'endGame':
