@@ -488,6 +488,9 @@ const actions = {
   lvl(d) { state.lvlMax = +d.v; save(); },
   unnever(d) { delete state.never[d.id]; save(); },
   unlater(d) { removeLater(d.id); save(); },
+  clearLater() { ui.modal = { type: 'clearLater' }; },
+  clearLaterYes() { state.later = []; save(); ui.modal = null; toast('Отложенное очищено'); },
+  peekUnlater() { removeLater(ui.peek); save(); ui.peek = null; ui.deckFor = null; toast('Убрано из отложенного'); },
   unfav(d) { delete state.fav[d.id]; save(); },
   setPin() {
     const v = $('#newPin').value.trim();
@@ -659,7 +662,8 @@ function dashView() {
 
   // Отложенное
   if (state.later.length) {
-    h += `<div class="sec">Отложено и в планах</div><div class="links">`;
+    h += `<div class="zone-title" style="margin:20px 0 8px"><span class="sec" style="margin:0">Отложено и в планах</span>
+      <button class="textlink" style="padding:0" data-act="clearLater">очистить</button></div><div class="links">`;
     h += state.later.map(x => {
       const c = byId(x.id);
       return c ? `<button class="chip ${x.plan ? 'buy' : ''}" data-act="view" data-id="${c.id}">${TYPE[c.type].sym} ${esc(cardFor(c, L).title)}</button>` : '';
@@ -821,7 +825,8 @@ function peekView() {
   return `<div class="peek"><div class="inner">
     <button class="back" data-act="peekClose">‹ Закрыть</button>
     ${cardHtml(card, L)}
-    <div class="card-tools"><button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button></div>
+    <div class="card-tools"><button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
+      ${state.later.some(x => x.id === card.id) ? '<button class="textlink" data-act="peekUnlater">Убрать из отложенного</button>' : ''}</div>
   </div></div>`;
 }
 
@@ -861,7 +866,8 @@ function settingsView() {
     return s + `</div>`;
   };
   h += list('Избранное', 'Эти карты выпадают в три раза чаще.', Object.keys(state.fav), 'unfav', 'убрать');
-  h += list('Отложено', 'Предлагаются первыми в следующей игре.', state.later.map(x => x.id), 'unlater', 'убрать');
+  h += list('Отложено и в планах', 'Предлагаются первыми в следующей игре. Убрать можно по одной или все сразу.', state.later.map(x => x.id), 'unlater', 'убрать');
+  if (state.later.length) h += `<div class="who-row"><button class="btn ghost small" data-act="clearLater">Очистить всё отложенное</button></div>`;
   h += list('Никогда', 'Эти карты больше не выпадают. Можно вернуть, если передумали.', Object.keys(state.never), 'unnever', 'вернуть');
 
   h += `<div class="set-sec"><h2>Код на вход</h2><p class="lead">Приложение будет спрашивать 4 цифры при каждом открытии.</p>
@@ -1052,6 +1058,11 @@ function modalView() {
     case 'endGame':
       body = `<h2>Завершить игру?</h2><p class="lead">Счётчики поз и действий обнулятся. Идущий сценарий останется до конца своих трёх часов.</p>
       <div class="btns"><button class="btn primary" data-act="endGameYes">Завершить</button><button class="btn ghost" data-act="closeModal">Ещё играем</button></div>`;
+      break;
+
+    case 'clearLater':
+      body = `<h2>Очистить отложенное?</h2><p class="lead">Все карты из «Отложено и в планах» вернутся в обычные колоды. Список покупок не изменится.</p>
+      <div class="btns"><button class="btn primary" data-act="clearLaterYes">Очистить</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
       break;
 
     case 'resetGame':
