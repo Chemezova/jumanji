@@ -455,6 +455,7 @@ const actions = {
   openPlaying() { ui.screen = 'playing'; window.scrollTo(0, 0); },
   home() { ui.screen = 'dash'; window.scrollTo(0, 0); },
   view(d) { ui.peek = d.id; },
+  viewPlayed(d) { ui.peek = d.id; ui.deckFor = d.l; },
 
   // арсенал и покупки
   toy(d) { if (state.arsenal[d.id]) delete state.arsenal[d.id]; else state.arsenal[d.id] = true; save(); },
@@ -650,8 +651,8 @@ function dashView() {
   } else {
     h += deckBtn('scenario', '');
   }
-  h += deckBtn('pose', state.when === 'now' ? `${used('pose')} / ${MAX_PER_GAME}` : '');
-  h += deckBtn('action', state.when === 'now' ? `${used('action')} / ${MAX_PER_GAME}` : '');
+  h += deckBtn('pose', state.when === 'now' ? `${used('pose')} / ${MAX_PER_GAME}` : '') + playedChips('pose');
+  h += deckBtn('action', state.when === 'now' ? `${used('action')} / ${MAX_PER_GAME}` : '') + playedChips('action');
   h += state.turnPlays
     ? `<div class="who-row"><button class="btn" data-act="turnDone">Ход сделан — ${turnDoneText()}</button></div>`
     : f ? '' : `<div class="who-row"><button class="btn ghost small" data-act="skip">Пропустить ход (штраф)</button></div>`;
@@ -673,12 +674,26 @@ function dashView() {
     h += played.length
       ? `<ul class="list">${played.map(e => {
         const c = byId(e.id);
-        return `<li><span>${TYPE[c.type].sym}</span><span class="grow">${esc(cardFor(c, e.L).title)}</span><span class="meta">${NAME[e.L]} · ${hm(e.ts)}</span></li>`;
+        return `<li data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}"><span>${TYPE[c.type].sym}</span><span class="grow">${esc(cardFor(c, e.L).title)}</span><span class="meta">${NAME[e.L]} · ${hm(e.ts)} ›</span></li>`;
       }).join('')}</ul>`
       : `<div class="empty">Пока ничего</div>`;
     h += `<div class="who-row"><button class="btn ghost small" data-act="endGame">Завершить игру</button></div>`;
   }
   return h;
+}
+
+// Карты этой игры одного типа — под кнопкой колоды, нажатие открывает карту
+function playedOf(type) {
+  if (!state.game) return [];
+  return state.log.filter(e => e.ts >= state.game.start && e.r === 'play' && byId(e.id)?.type === type);
+}
+function playedChips(type) {
+  const list = playedOf(type);
+  if (!list.length) return '';
+  return `<div class="links played">${list.map(e => {
+    const c = byId(e.id);
+    return `<button class="chip have" data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}">${TYPE[type].sym} ${esc(cardFor(c, e.L).title)}</button>`;
+  }).join('')}</div>`;
 }
 
 // Что будет после «Ход сделан»

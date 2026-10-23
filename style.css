@@ -118,6 +118,7 @@ a { color: var(--gold); }
 }
 .chip.have { border-color: rgba(111, 174, 138, .5); color: #a9d8bd; }
 .chip.miss { border-color: rgba(168, 35, 59, .6); color: #e89aa8; }
+.links.played { margin: -2px 0 12px 4px; }
 .chip.buy { border-color: var(--gold); color: var(--gold); }
 
 .list { margin: 0; padding: 0; list-style: none; }
