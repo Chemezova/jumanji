@@ -1088,9 +1088,10 @@ function deckView() {
   if (ui.jokerPick) return jokerDeckView();
   const t = ui.deckType || 'scenario';
   const lead = ui.deckLead || 'M';
-  // карты с пометкой pos встают на своё место в списке (pos: 8 — восьмая строка)
+  // карты с пометкой pos встают на своё место в списке (pos: 8 — восьмая строка),
+  // остальные перемешаны раз и навсегда, чтобы новые партии не шли хвостом в конце
   const all = CARDS.filter(c => c.type === t && (!c.leaders || c.leaders.includes(lead)));
-  const list = all.filter(c => !c.pos);
+  const list = all.filter(c => !c.pos).sort(byMix);
   all.filter(c => c.pos).sort((a, b) => a.pos - b.pos).forEach(c => list.splice(Math.min(c.pos - 1, list.length), 0, c));
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Колода</h1>
     <p class="lead" style="color:var(--muted);margin:0">Всего карт: ${CARDS.length}. Нажмите на карту, чтобы открыть её целиком.</p>
@@ -1106,13 +1107,23 @@ function deckView() {
   return h + '</ul>';
 }
 
+// Постоянный «перемешанный» порядок каталога: по хэшу id, одинаковый на любом телефоне.
+// «Доктор» оставлен первым — с него колода начиналась
+function mixKey(c) {
+  if (c.id === 'sc-doctor') return -1;
+  let h = 2166136261;
+  for (const ch of c.id) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  return h;
+}
+function byMix(a, b) { return mixKey(a) - mixKey(b); }
+
 // Джокер: любая карта той же колоды, избранное — сверху
 function jokerDeckView() {
   const t = ui.jokerPick;
   const L = state.leader;
   const ok = CARDS.filter(c => c.type === t && !c.joker && !state.never[c.id] && (!c.leaders || c.leaders.includes(topFor(c, L))));
-  const favs = ok.filter(c => state.fav[c.id]);
-  const rest = ok.filter(c => !state.fav[c.id]);
+  const favs = ok.filter(c => state.fav[c.id]).sort(byMix);
+  const rest = ok.filter(c => !state.fav[c.id]).sort(byMix);
   const row = c => `<li>
       <span>${c.switch ? '⇅' : TYPE[c.type].sym}</span>
       <button class="grow" style="text-align:left" data-act="view" data-id="${c.id}"><div>${esc(cardFor(c, topFor(c, L)).title)}</div><div class="meta">${esc(c.teaser || '')}</div></button>
