@@ -35,7 +35,7 @@ const TYPE = {
 };
 const RESULT = {
   play: 'начали', plan: 'в планы', later: 'потом', never: 'никогда', skip: 'пропуск хода',
-  punish: 'штраф', gift: 'подарок', refuse: 'отказ', stop: 'стоп-слово', done: 'сыграли',
+  punish: 'штраф', paid: 'выполнено', gift: 'подарок', refuse: 'отказ', stop: 'стоп-слово', done: 'сыграли',
 };
 
 // ---------- Хранилище ----------
@@ -58,6 +58,7 @@ function emptyState() {
     playing: null,        // { id, leader, start }
     drawn: null,          // { id, from } — вытянутая карта ждёт решения
     newToy: null,         // только что купленная игрушка — с неё начинается следующая игра
+    penaltyDue: null,     // { who, title, text, ts } — наказание назначено и не выполнено: игра стоит
     turnUsed: {},         // тип → уже взят в этом ходе (за ход — 1 сценарий, 1 поза, 1 действие)
     turnLater: 0,         // сколько раз за ход нажали «Давай потом»
     stats: {},            // id → { p: сыграли, l: откладывали } — рейтинг карты
@@ -286,6 +287,14 @@ function pendingFor(type) {
 // «по очереди» ведущий меняется, со стрелкой — крутим заново
 // Пока по вытянутой карте нет решения, ведущий не меняется: ни стрелкой, ни вручную,
 // ни подарком, ни «Ход сделан» — иначе карта достанется следующему игроку
+// Пока наказание не выполнено, игра стоит: ни новых карт, ни смены ведущего
+function waitPenalty() {
+  const p = state.penaltyDue;
+  toast(`Сначала наказание: ${NAME[p.who]} — ${p.title}. Ведущий нажимает «Выполнено»`);
+  ui.screen = 'dash';
+  window.scrollTo(0, 0);
+}
+
 function waitDecision() {
   toast('Сначала решите, что делать с вытянутой картой: «Играем», «Потом» или «Никогда»');
   ui.screen = 'card';
@@ -353,6 +362,7 @@ const actions = {
 
   // ведущий
   pickLeader(d) {
+    if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
     if (state.forced) return toast(`Ход у ${state.forced.who === 'M' ? 'него' : 'неё'}: ${fixedWhy(state.forced)}`);
     state.leader = d.l; save();
@@ -360,6 +370,7 @@ const actions = {
   pickMode(d) { state.pickMode = d.m; save(); },
   when(d) { state.when = d.w; save(); },
   spin() {
+    if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'spin', result: null };
@@ -385,6 +396,7 @@ const actions = {
 
   // колоды
   draw(d) {
+    if (state.penaltyDue) return waitPenalty();
     if (state.drawn) { ui.screen = 'card'; window.scrollTo(0, 0); return; }   // сначала решение по вытянутой
     const why = canDraw(d.t);
     if (why) return toast(why);
@@ -506,6 +518,7 @@ const actions = {
     save();
   },
   skip() {
+    if (state.penaltyDue) return waitPenalty();
     if (state.forced) return toast(`Сейчас пропустить нельзя: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'skip' };
   },
@@ -557,6 +570,7 @@ const actions = {
     const i = d.i === 'rand' ? Math.floor(Math.random() * PENALTIES.length) : +d.i;
     const p = PENALTIES[i];
     state.log.push({ ts: now(), id: null, L: m.who, r: 'punish', note: `${p.title} — ${m.reason}` });
+    state.penaltyDue = { who: m.who, title: p.title, text: p.text, ts: now() };
     save();
     ui.modal = { type: 'penaltyShow', who: m.who, title: p.title, text: p.text };
   },
@@ -565,6 +579,7 @@ const actions = {
     if (!text) return toast('Напишите, чего хотите');
     const m = ui.modal;
     state.log.push({ ts: now(), id: null, L: m.who, r: 'punish', note: `Прихоть: ${text} — ${m.reason}` });
+    state.penaltyDue = { who: m.who, title: 'Прихоть', text, ts: now() };
     save();
     ui.modal = { type: 'penaltyShow', who: m.who, title: 'Прихоть', text };
   },
@@ -572,6 +587,18 @@ const actions = {
   bodyMap() { const m = ui.modal; ui.modal = { type: 'bodyMap', who: m.who, by: m.by, reason: m.reason, spins: [], angle: 0 }; },
   punishBack() { const m = ui.modal; ui.modal = { type: 'punish', who: m.who, by: m.by, reason: m.reason }; },
   // отменить наказание с колеса: запись из журнала убирается
+  bodyAccept() {
+    const m = ui.modal;
+    const z = BODY_MAP[m.spins[0]];
+    state.penaltyDue = { who: m.who, title: `Карта наказаний: ${z.zone}`, text: z.how, ts: now() };
+    save(); ui.modal = null;
+  },
+  penaltyDone() {
+    const p = state.penaltyDue;
+    state.log.push({ ts: now(), id: null, L: p.who, r: 'paid', note: `Наказание выполнено: ${p.title}` });
+    state.penaltyDue = null;
+    save(); toast('Наказание выполнено. Игра продолжается');
+  },
   bodyCancel() {
     const e = state.log[state.log.length - 1];
     if (e && e.r === 'punish' && (e.note || '').startsWith('Карта наказаний')) state.log.pop();
@@ -681,6 +708,7 @@ const actions = {
   // подарок ходов
   // ведущий сам отдаёт ход партнёру — без штрафа, сразу на несколько ходов подряд
   gift() {
+    if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'gift', n: 3 };
@@ -698,6 +726,7 @@ const actions = {
     toast(`🎁 ${NAME[to]} ведёт следующие ${turns(n)}`);
   },
   turnDone() {
+    if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
     endTurn(); save();
     toast(state.leader ? `Ход переходит: ведёт ${NAME[state.leader]}` : 'Ход сделан. Крутите стрелку заново');
@@ -805,6 +834,17 @@ function dashView() {
       <button class="${state.when === 'now' ? 'on' : ''}" data-act="when" data-w="now">Играем сейчас</button>
       <button class="${state.when === 'next' ? 'on' : ''}" data-act="when" data-w="next">На следующий раз</button>
     </div>`;
+
+  // Невыполненное наказание держит игру
+  if (state.penaltyDue) {
+    const p = state.penaltyDue;
+    h += `<div class="note penalty-due">
+      <div class="pd-head">🟥 ${NAME[p.who]} ${p.who === 'F' ? 'наказана' : 'наказан'}: <b>${esc(p.title)}</b></div>
+      <div class="pd-text">${esc(p.text)}</div>
+      <div class="pd-meta">Назначено ${dayName(p.ts).toLowerCase()} в ${hm(p.ts)}. Пока не выполнено — игра стоит.</div>
+      <button class="btn primary" data-act="penaltyDone">Выполнено</button>
+    </div>`;
+  }
 
   // Незаконченное: карта в игре или вытянутая без решения
   if (state.playing) {
@@ -1156,7 +1196,7 @@ function journalView() {
     const dur = e.dur ? ` · ${Math.round(e.dur / MIN)} мин` : '';
     return `${head}<li ${c ? `data-act="view" data-id="${c.id}"` : ''}>
       <span>${c ? TYPE[c.type].sym : e.r === 'gift' ? '🎁' : '✕'}</span>
-      <div class="grow"><div>${title}</div>${c && e.note ? `<div class="meta">«${esc(e.note)}»</div>` : ''}<div class="meta">${hm(e.ts)} · ${e.r === 'punish' ? 'штраф для' : 'ведёт'} ${NAME[e.L] || '—'}${dur}</div></div>
+      <div class="grow"><div>${title}</div>${c && e.note ? `<div class="meta">«${esc(e.note)}»</div>` : ''}<div class="meta">${hm(e.ts)} · ${e.r === 'punish' || e.r === 'paid' ? 'штраф для' : 'ведёт'} ${NAME[e.L] || '—'}${dur}</div></div>
       <span class="res ${e.r}">${RESULT[e.r] || e.r}</span></li>`;
   }).join('') + '</ul>';
   return h;
@@ -1299,7 +1339,7 @@ function modalView() {
       <div class="wheel-wrap">${bodyWheelSvg()}</div>
       ${last ? `<div class="box order" style="text-align:center"><b>${esc(last.zone)}</b>${esc(last.how)}</div>` : ''}
       <div class="btns">${last
-        ? `<button class="btn primary" data-act="closeModal">Принято</button>
+        ? `<button class="btn primary" data-act="bodyAccept">Принято</button>
         <button class="btn ghost" data-act="bodyCancel">Отменить наказание</button>`
         : `<button class="btn primary" data-act="bodySpin">Крутить</button>
         <button class="btn ghost" data-act="punishBack">Назад</button>`}

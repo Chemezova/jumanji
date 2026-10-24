@@ -88,6 +88,11 @@ a { color: var(--gold); }
 }
 .note.gift { background: rgba(201, 164, 108, .1); border-color: rgba(201, 164, 108, .45); }
 .hint-line { color: var(--muted); font-size: 13px; margin: -4px 0 12px; }
+.note.penalty-due { background: rgba(211, 47, 76, .14); border-color: #c33a52; display: grid; gap: 6px; }
+.note.penalty-due .pd-head { font-family: var(--serif); font-size: 18px; }
+.note.penalty-due .pd-text { color: var(--text); }
+.note.penalty-due .pd-meta { color: var(--muted); font-size: 12px; }
+.note.penalty-due .btn { margin-top: 4px; }
 .note.soft { background: var(--surface); border-color: var(--line); color: var(--muted); }
 
 /* ---------- Зона ведущего ---------- */
