@@ -284,6 +284,14 @@ function pendingFor(type) {
 // Ход — это всё, что ведущий взял в игру: сценарий, позы, действия вместе.
 // Ход закончился: закреплённые ходы (штраф, подарок) идут вниз,
 // «по очереди» ведущий меняется, со стрелкой — крутим заново
+// Пока по вытянутой карте нет решения, ведущий не меняется: ни стрелкой, ни вручную,
+// ни подарком, ни «Ход сделан» — иначе карта достанется следующему игроку
+function waitDecision() {
+  toast('Сначала решите, что делать с вытянутой картой: «Играем», «Потом» или «Никогда»');
+  ui.screen = 'card';
+  window.scrollTo(0, 0);
+}
+
 function resetTurn() {
   state.turnPlays = 0;
   state.turnUsed = {};
@@ -345,12 +353,14 @@ const actions = {
 
   // ведущий
   pickLeader(d) {
+    if (state.drawn) return waitDecision();
     if (state.forced) return toast(`Ход у ${state.forced.who === 'M' ? 'него' : 'неё'}: ${fixedWhy(state.forced)}`);
     state.leader = d.l; save();
   },
   pickMode(d) { state.pickMode = d.m; save(); },
   when(d) { state.when = d.w; save(); },
   spin() {
+    if (state.drawn) return waitDecision();
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'spin', result: null };
   },
@@ -665,6 +675,7 @@ const actions = {
   // подарок ходов
   // ведущий сам отдаёт ход партнёру — без штрафа, сразу на несколько ходов подряд
   gift() {
+    if (state.drawn) return waitDecision();
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'gift', n: 3 };
   },
@@ -681,6 +692,7 @@ const actions = {
     toast(`🎁 ${NAME[to]} ведёт следующие ${turns(n)}`);
   },
   turnDone() {
+    if (state.drawn) return waitDecision();
     endTurn(); save();
     toast(state.leader ? `Ход переходит: ведёт ${NAME[state.leader]}` : 'Ход сделан. Крутите стрелку заново');
   },
@@ -763,7 +775,7 @@ function topBar() {
 function dashView() {
   const L = state.leader;
   const f = state.forced;
-  const player = l => `<button class="player ${l} ${L === l ? 'on' : ''}" data-act="pickLeader" data-l="${l}" ${f && f.who !== l ? 'disabled' : ''}>
+  const player = l => `<button class="player ${l} ${L === l ? 'on' : ''}" data-act="pickLeader" data-l="${l}" ${f && f.who !== l ? 'disabled' : ''} ${state.drawn ? 'data-why="1"' : ''}>
       <div class="nm">${NAME[l]}</div>
       <div class="st">${L === l ? 'ведёт' : 'подчиняется'}</div>
     </button>`;
@@ -771,7 +783,7 @@ function dashView() {
   let h = topBar();
   h += `<div class="players">${player('M')}${player('F')}</div>`;
   h += `<div class="who-row">
-      <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''}>➶ Кто сегодня главный?</button>
+      <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''} ${state.drawn ? 'data-why="1"' : ''}>➶ Кто сегодня главный?</button>
     </div>`;
   h += `<div class="seg">
       <button class="${state.pickMode === 'random' ? 'on' : ''}" data-act="pickMode" data-m="random">Стрелка</button>

@@ -113,7 +113,7 @@ a { color: var(--gold); }
 .deck .cnt { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .deck.active { border-color: var(--gold); }
 .deck.active .d { color: var(--gold); }
-.deck[data-why] { opacity: .45; }
+.deck[data-why], .player[data-why], .btn[data-why] { opacity: .45; }
 
 .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .chip {
