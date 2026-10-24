@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 50;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 51;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -252,10 +252,16 @@ function ensureGame() {
 
 function used(type) { return state.game ? state.game[type] || 0 : 0; }
 
+// Лимиты хода у «Сейчас» и «На следующий раз» свои: можно взять комплект на сегодня и ещё один в планы
+function usedNow() {
+  const k = state.when === 'next' ? 'turnUsedNext' : 'turnUsed';
+  return state[k] || (state[k] = {});
+}
+
 function canDraw(type) {
   if (!state.leader) return 'Сначала выберите ведущего';
-  if (type === 'scenario' && state.scenario) return 'Сценарий уже идёт — переиграть нельзя';
-  const u = (state.turnUsed || {})[type];
+  if (type === 'scenario' && state.scenario && state.when !== 'next') return 'Сценарий уже идёт — переиграть нельзя';
+  const u = usedNow()[type];
   if (type === 'pose' && (u || 0) >= POSES_PER_TURN) return `${POSES_PER_TURN} позы в этом ходе уже было. Дальше — «Ход сделан»`;
   if (type !== 'pose' && u) return `${TYPE[type].one} в этом ходе уже есть. Дальше — «Ход сделан»`;
   return '';
@@ -308,7 +314,7 @@ function pickRandom(type) {
     if (joker) return joker;
   }
   // идёт сценарий — позы и действия близкой остроты: нежному нежное, жёсткому жёсткое
-  const sc = state.scenario && type !== 'scenario' ? byId(state.scenario.id) : null;
+  const sc = state.scenario && type !== 'scenario' && state.when !== 'next' ? byId(state.scenario.id) : null;
   if (sc) {
     const near = pool.filter(c => c.joker || Math.abs((c.lvl || 1) - (sc.lvl || 1)) <= 1);
     if (near.length) pool = near;
@@ -390,6 +396,7 @@ function passBtn() {
 function resetTurn() {
   state.turnPlays = 0;
   state.turnUsed = {};
+  state.turnUsedNext = {};
   state.turnLater = 0;
   state.turnPass = 0;
 }
@@ -409,9 +416,9 @@ function endTurn() {
 
 // Взяли карту в игру (или в планы): за ход — одна карта каждого типа; рейтинг растёт
 function markPlayed(card) {
-  if (!state.turnUsed) state.turnUsed = {};
-  if (card.type === 'pose') state.turnUsed.pose = (state.turnUsed.pose || 0) + 1;
-  else state.turnUsed[card.type] = true;
+  const u = usedNow();
+  if (card.type === 'pose') u.pose = (u.pose || 0) + 1;
+  else u[card.type] = true;
   stat(card.id).p++;
 }
 
@@ -1090,7 +1097,8 @@ function dashView() {
     <p class="hint-line">Сценарий, позы и действия складываются — можно всё вместе за один ход.</p>`;
 
   // Сценарий
-  const sc = state.scenario;
+  const sc = state.when === 'next' ? null : state.scenario;   // в планы сценарий тянется, даже когда сегодняшний идёт
+  const u = usedNow();
   if (sc) {
     const c = byId(sc.id);
     h += `<button class="deck active" data-act="viewScenario">
@@ -1100,10 +1108,10 @@ function dashView() {
       <div class="cnt" data-left="${sc.start}">${clock(GAME_MS - (now() - sc.start))}</div>
     </button>`;
   } else {
-    h += deckBtn('scenario', '');
+    h += deckBtn('scenario', u.scenario ? '✓ в ходе' : '');
   }
-  h += deckBtn('pose', (state.turnUsed || {}).pose ? `${state.turnUsed.pose} / ${POSES_PER_TURN}` : '') + playedChips('pose');
-  h += deckBtn('action', (state.turnUsed || {}).action ? '✓ в ходе' : '') + playedChips('action');
+  h += deckBtn('pose', u.pose ? `${u.pose} / ${POSES_PER_TURN}` : '') + playedChips('pose');
+  h += deckBtn('action', u.action ? '✓ в ходе' : '') + playedChips('action');
   h += state.turnPlays
     ? `<div class="who-row"><button class="btn" data-act="turnDone">Ход сделан — ${turnDoneText()}</button></div>`
     : f ? '' : `<div class="who-row"><button class="btn ghost small" data-act="skip">Пропустить ход (штраф)</button></div>`;
