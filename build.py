@@ -16,6 +16,8 @@ ITER = 600_000
 b64 = lambda b: base64.b64encode(b).decode()
 
 password = (CONTENT / 'password.txt').read_text(encoding='utf-8').strip()
+if any(ch.isspace() for ch in password):
+    sys.exit('В пароле не должно быть пробелов: телефон их не отличает от мусора при вставке')
 if len(password) < 8:
     sys.exit('Пароль короче 8 символов — слишком легко подобрать')
 

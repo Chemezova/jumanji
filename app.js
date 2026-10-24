@@ -565,7 +565,10 @@ const actions = {
   go(d) { ui.back = ui.screen; ui.screen = d.s; ui.jokerPick = null; window.scrollTo(0, 0); },
   openDrawn() { ui.screen = 'card'; window.scrollTo(0, 0); },
   openPlaying() { ui.screen = 'playing'; window.scrollTo(0, 0); },
-  home() { ui.screen = 'dash'; ui.jokerPick = null; window.scrollTo(0, 0); },
+  home() {
+    if (ui.reloadPending) { location.reload(); return 'norender'; }
+    ui.screen = 'dash'; ui.jokerPick = null; window.scrollTo(0, 0);
+  },
   view(d) { ui.peek = d.id; },
   viewPlayed(d) { ui.peek = d.id; ui.deckFor = d.l; },
 
@@ -654,8 +657,9 @@ const actions = {
   unlockDeck() {
     ui.deckPwValue = $('#deckPw').value;
     ui.deckShow = $('#deckPw').type === 'text';
-    // пробелы по краям — частая опечатка на телефоне; в самом пароле их нет
-    const pw = ui.deckPwValue.trim();
+    // При вставке из заметок телефон тащит пробелы, переносы и невидимые символы.
+    // В самом пароле пробелов нет (build.py это проверяет), поэтому убираем их все
+    const pw = ui.deckPwValue.replace(/[\s\u00A0\u200B-\u200D\u2060\uFEFF]/g, '');
     if (!pw) return;
     ui.deckBusy = true; ui.deckError = false;
     render();
@@ -1292,7 +1296,18 @@ document.addEventListener('visibilitychange', () => {
 });
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').then(reg => {
+    // приложение с экрана «Домой» живёт долго и само не перезагружается:
+    // при каждом возвращении проверяем, нет ли новой версии
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  }).catch(() => {}));
+  // новая версия встала — перезагрузиться, пока не идёт игра; иначе — при выходе на главную
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }   // первая установка — не перезагружаем
+    if (!CARDS.length || (ui.screen === 'dash' && !ui.modal)) location.reload();
+    else ui.reloadPending = true;
+  });
 }
 
 // ---------- Колода ----------
