@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 48;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 49;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -25,6 +25,7 @@ const AUTHOR_IDS = new Set([
   'buy-shackles', 'buy-douche', 'buy-bdsm-kit', 'buy-any',
 ]);          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
+const PASS_PER_TURN = 3;          // «Не сейчас» — перебрать карты, без штрафа
 const LATER_PER_TURN = 5;          // пятое «потом» за ход — красная карточка и ход партнёру
 const LATER_TO_NEVER = 10;         // столько раз отложили — карта уходит в «Никогда»
 const NEW_TOY_WEIGHT = 12;         // только что купленная игрушка выпадает почти сразу
@@ -377,10 +378,20 @@ function waitDecision() {
   window.scrollTo(0, 0);
 }
 
+// «Не сейчас»: 3 за ход (в подарок — без лимита); вытянутое из отложенного и по плану не пропускается
+function passBtn() {
+  if (state.drawn && state.drawn.from !== 'deck') return '';
+  const left = inGift() ? Infinity : PASS_PER_TURN - (state.turnPass || 0);
+  return left > 0
+    ? `<button class="btn ghost" style="grid-column:1/-1" data-act="pass">Не сейчас${left === Infinity ? '' : ` · осталось ${left}`}</button>`
+    : `<button class="btn ghost" style="grid-column:1/-1" disabled>Пропуски на этот ход кончились</button>`;
+}
+
 function resetTurn() {
   state.turnPlays = 0;
   state.turnUsed = {};
   state.turnLater = 0;
+  state.turnPass = 0;
 }
 
 function endTurn() {
@@ -582,6 +593,16 @@ const actions = {
     } else toast(`Отложено на ${dayLabel(d && d.day)}` + (inGift() ? '' : ` · в этом ходе ${state.turnLater} из ${LATER_PER_TURN}`));
     if (state.turnLater >= LATER_PER_TURN) passTurn(state.leader, `${LATER_PER_TURN} раз «Давай потом» за ход`);
     save();
+  },
+  // «Не сейчас» — карта молча возвращается в колоду, сразу тянем следующую
+  pass() {
+    const card = byId(state.drawn.id);
+    if (!inGift()) {
+      if ((state.turnPass || 0) >= PASS_PER_TURN) return toast('Пропуски на этот ход кончились');
+      state.turnPass = (state.turnPass || 0) + 1;
+    }
+    state.drawn = null; save();
+    return actions.draw({ t: card.type });
   },
   never() { ui.modal = { type: 'never' }; },
   // джокер: вместо своей фантазии — любая карта этой колоды или из избранного
@@ -1195,6 +1216,7 @@ function cardScreen() {
     <button class="btn primary" data-act="play">${state.when === 'next' ? 'Играем — назначить день' : 'Играем'}</button>
     <button class="btn" data-act="schedule" data-mode="later">Отложить на день…</button>
     ${card.joker ? '' : '<button class="btn" data-act="never">Никогда</button>'}
+    ${passBtn()}
   </div>`;
   h += `<div class="card-tools">
     <button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
