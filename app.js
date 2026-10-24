@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 46;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 47;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -510,7 +510,7 @@ const actions = {
     else state.game[card.type] = used(card.type) + 1;
     closePlaying();
     state.playing = { id: card.id, leader: top, start: now() };
-    log(card.id, 'play', Object.assign({ L: top }, jokerWish()));
+    log(card.id, 'play', Object.assign({ L: top }, state.drawn.from === 'joker' ? { via: 'joker' } : {}, jokerWish()));
     if (state.newToy && usesToy(card, state.newToy)) state.newToy = null;   // новинку обыграли
     markPlayed(card);
     state.turnPlays++; save();
@@ -1023,7 +1023,7 @@ function dashView() {
     h += played.length
       ? `<ul class="list">${played.map(e => {
         const c = byId(e.id);
-        return `<li data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}"><span>${TYPE[c.type].sym}</span><span class="grow">${esc(cardFor(c, e.L).title)}</span><span class="meta">${NAME[e.L]} · ${hm(e.ts)} ›</span></li>`;
+        return `<li data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}"><span>${TYPE[c.type].sym}</span><span class="grow">${esc(playedTitle(e, c))}</span><span class="meta">${NAME[e.L]} · ${hm(e.ts)} ›</span></li>`;
       }).join('')}</ul>`
       : `<div class="empty">Пока ничего</div>`;
     h += `<div class="who-row"><button class="btn ghost small" data-act="endGame">Завершить игру</button></div>`;
@@ -1036,12 +1036,18 @@ function playedOf(type) {
   if (!state.game) return [];
   return state.log.filter(e => e.ts >= state.game.start && e.r === 'play' && byId(e.id)?.type === type);
 }
+// Как подписать сыгранную карту: джокер — с загаданной фантазией, карта по джокеру — со звёздочкой
+function playedTitle(e, c) {
+  if (c.joker) return e.note ? `★ Джокер: ${e.note}` : '★ Джокер';
+  return (e.via === 'joker' ? '★ ' : '') + cardFor(c, e.L || 'M').title;
+}
+
 function playedChips(type) {
   const list = playedOf(type);
   if (!list.length) return '';
   return `<div class="links played">${list.map(e => {
     const c = byId(e.id);
-    return `<button class="chip have" data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}">${TYPE[type].sym} ${esc(cardFor(c, e.L).title)}</button>`;
+    return `<button class="chip have" data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}">${TYPE[type].sym} ${esc(playedTitle(e, c))}</button>`;
   }).join('')}</div>`;
 }
 
@@ -1375,11 +1381,11 @@ function journalView() {
     const d = dayName(e.ts);
     const head = d !== day ? `${day ? '</ul>' : ''}<div class="day">${d}</div><ul class="list">` : '';
     day = d;
-    const title = c ? esc(cardFor(c, e.L || 'M').title) : esc(e.note || '');
+    const title = c ? esc(e.r === 'play' ? playedTitle(e, c) : cardFor(c, e.L || 'M').title) : esc(e.note || '');
     const dur = e.dur ? ` · ${Math.round(e.dur / MIN)} мин` : '';
     return `${head}<li ${c ? `data-act="view" data-id="${c.id}"` : ''}>
       <span>${c ? TYPE[c.type].sym : e.r === 'gift' ? '🎁' : '✕'}</span>
-      <div class="grow"><div>${title}</div>${c && e.note ? `<div class="meta">«${esc(e.note)}»</div>` : ''}<div class="meta">${hm(e.ts)} · ${e.r === 'punish' || e.r === 'paid' ? 'штраф для' : 'ведёт'} ${NAME[e.L] || '—'}${dur}</div></div>
+      <div class="grow"><div>${title}</div>${c && e.note && !(c.joker && e.r === 'play') ? `<div class="meta">«${esc(e.note)}»</div>` : ''}<div class="meta">${hm(e.ts)} · ${e.r === 'punish' || e.r === 'paid' ? 'штраф для' : 'ведёт'} ${NAME[e.L] || '—'}${dur}</div></div>
       <span class="res ${e.r}">${RESULT[e.r] || e.r}</span></li>`;
   }).join('') + '</ul>';
   h += `<div class="who-row" style="justify-content:center;margin-top:24px"><button class="textlink" data-act="clearLog">Стереть</button></div>`;
