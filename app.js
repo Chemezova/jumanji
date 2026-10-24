@@ -8,6 +8,7 @@ const MAX_PER_GAME = 4;            // поз и действий за игру
 const FORCED_TURNS = 3;            // после «Никогда» ход у партнёра столько раз
 const HE_CHANCE = 0.5;             // доля «ОН» в стрелке
 const FAV_WEIGHT = 3;
+const NEW_TOY_WEIGHT = 12;         // только что купленная игрушка выпадает почти сразу
 
 // Колода приходит зашифрованной (deck.js) и заполняется после ввода пароля
 let TOYS = [], PENALTIES = [], CARDS = [];
@@ -42,6 +43,7 @@ function emptyState() {
     scenario: null,       // { id, leader, start }
     playing: null,        // { id, leader, start }
     drawn: null,          // { id, from } — вытянутая карта ждёт решения
+    newToy: null,         // только что купленная игрушка — с неё начинается следующая игра
     turnPlays: 0,         // сколько карт взято в игру за текущий ход
     fav: {},
     never: {},
@@ -211,6 +213,7 @@ function pickRandom(type) {
   const t = now();
   const weights = pool.map(c => {
     let w = state.fav[c.id] ? FAV_WEIGHT : 1;
+    if (state.newToy && usesToy(c, state.newToy)) w *= NEW_TOY_WEIGHT;   // новинка — первой
     const seen = state.seen[c.id];
     if (seen && t - seen < 24 * 60 * MIN) w *= 0.25;   // недавно выпадала — реже
     return w;
@@ -249,6 +252,12 @@ function closePlaying() {
   if (!p) return;
   state.log.push({ ts: now(), id: p.id, L: p.leader, r: 'done', dur: now() - p.start });
   state.playing = null;
+}
+
+// Карта как-то связана с игрушкой: нужна, пригодится или покупается
+function usesToy(card, id) {
+  const lists = [card.needs, card.uses, card.buy, card.M && card.M.uses, card.F && card.F.uses];
+  return lists.some(l => (l || []).some(n => n.split('|').includes(id)));
 }
 
 function removeLater(id) { state.later = state.later.filter(x => x.id !== id); }
@@ -343,6 +352,7 @@ const actions = {
     closePlaying();
     state.playing = { id: card.id, leader: top, start: now() };
     log(card.id, 'play', Object.assign({ L: top }, jokerWish()));
+    if (state.newToy && usesToy(card, state.newToy)) state.newToy = null;   // новинку обыграли
     state.turnPlays++; save();
     ui.screen = 'playing'; state.drawn = null; save();
     window.scrollTo(0, 0);
@@ -488,8 +498,14 @@ const actions = {
   bought(d) {
     state.arsenal[d.id] = true;
     state.shop = state.shop.filter(id => id !== d.id);
-    save(); toast(`${toyName(d.id)} — в арсенале`);
+    state.newToy = d.id;
+    save(); toast(`${toyName(d.id)} — в арсенале. Следующая игра начнётся с неё`);
   },
+  shopAdd(d) {
+    if (!state.shop.includes(d.id)) state.shop.push(d.id);
+    save(); toast(`${toyName(d.id)} — в списке «Купить»`);
+  },
+  dropNewToy() { state.newToy = null; save(); },
   unshop(d) { state.shop = state.shop.filter(id => id !== d.id); save(); },
   addShop() {
     const id = $('#shopPick').value;
@@ -632,6 +648,8 @@ function dashView() {
       <button class="${state.pickMode === 'random' ? 'on' : ''}" data-act="pickMode" data-m="random">Стрелка</button>
       <button class="${state.pickMode === 'turns' ? 'on' : ''}" data-act="pickMode" data-m="turns">По очереди</button>
     </div>`;
+  if (state.newToy) h += `<div class="note gift">✨ Новинка в арсенале: ${esc(toyName(state.newToy))}. Ближайшие карты будут с ней.
+      <button class="textlink" style="padding:4px 0 0;display:block" data-act="dropNewToy">Не начинать с неё</button></div>`;
   if (f && f.gift) h += `<div class="note gift">🎁 Ходы в подарок: ведёт ${NAME[f.who]} — ещё ${turns(f.left)}.
       <button class="textlink" style="padding:4px 0 0;display:block" data-act="giftEnd">Закончить подарок раньше</button></div>`;
   else if (f) h += `<div class="note">Штраф за «Никогда»: ведёт ${NAME[f.who]} — ещё ${turns(f.left)}.</div>`;
@@ -784,6 +802,11 @@ function cardHtml(card, L) {
   }).concat(t.uses.filter(id => !(card.buy || []).includes(id)).map(id =>
     `<span class="chip ${hasToy(id) ? 'have' : ''}">${esc(toyName(id))}${hasToy(id) ? '' : ' · по желанию'}</span>`));
   if (toys.length) h += `<div class="sec">Понадобится</div><div class="links">${toys.join('')}</div>`;
+  if (card.buyAny) {
+    const missing = allToys().filter(x => !hasToy(x.id));
+    h += `<div class="sec">Чего у вас ещё нет — нажмите, чтобы добавить в «Купить»</div><div class="links">${missing.map(x =>
+      `<button class="chip ${state.shop.includes(x.id) ? 'buy' : ''}" data-act="shopAdd" data-id="${x.id}">${state.shop.includes(x.id) ? '✓ ' : '+ '}${esc(x.name)}</button>`).join('') || '<span class="empty">В арсенале уже есть всё</span>'}</div>`;
+  }
   if (card.buy && card.buy.length) h += `<div class="sec">Купить к игре</div><div class="links">${card.buy.map(id => `<span class="chip ${hasToy(id) ? 'have' : 'buy'}">${esc(toyName(id))}${hasToy(id) ? ' — есть' : ''}</span>`).join('')}</div>`;
   if (t.steps.length) h += `<div class="sec">Как играть</div><ol class="steps">${t.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>`;
   h += t.tips.map(s => `<div class="box tip"><b>Лайфхак</b>${esc(s)}</div>`).join('');
