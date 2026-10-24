@@ -1,6 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
+const APP_VERSION = 41;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -196,6 +197,10 @@ function expire() {
   const t = now();
   let changed = false;
   if (state.scenario && t - state.scenario.start > GAME_MS) { state.scenario = null; changed = true; }
+  // сценарий, по которому уже нажали «Сыграли» (остался от прежней версии), — снять
+  if (state.scenario && state.log.some(e => e.r === 'done' && e.id === state.scenario.id && e.ts >= state.scenario.start)) {
+    state.scenario = null; changed = true;
+  }
   if (state.game && t - state.game.start > GAME_MS) { state.game = null; ui.skipLater = {}; changed = true; }
   if (changed) save();
 }
@@ -1137,7 +1142,7 @@ function settingsView() {
   </div>`;
 
   const n = t => CARDS.filter(c => c.type === t).length;
-  h += `<div class="set-sec"><h2>Игра</h2><p class="lead">В колоде: сценариев ${n('scenario')}, поз ${n('pose')}, действий ${n('action')}.</p>
+  h += `<div class="set-sec"><h2>Игра</h2><p class="lead">В колоде: сценариев ${n('scenario')}, поз ${n('pose')}, действий ${n('action')}. Версия приложения: ${APP_VERSION}.</p>
     <div class="btns" style="display:grid;gap:10px">
       <button class="btn" data-act="rules">Правила</button>
       <button class="btn ghost" data-act="resetGame">Сбросить текущую игру</button>
