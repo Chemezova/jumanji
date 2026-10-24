@@ -8,6 +8,10 @@ const MAX_PER_GAME = 4;            // поз и действий за игру
 const FORCED_TURNS = 3;            // после «Никогда» ход у партнёра столько раз
 const HE_CHANCE = 0.5;             // доля «ОН» в стрелке
 const FAV_WEIGHT = 3;
+const JOKER_WEIGHT = 3;            // джокер выпадает чаще обычной карты
+const RARE_WEIGHT = 0.1;           // «слишком игровые» сценарии в режиме «Сейчас»
+const LATER_PER_TURN = 5;          // пятое «потом» за ход — красная карточка и ход партнёру
+const LATER_TO_NEVER = 10;         // столько раз отложили — карта уходит в «Никогда»
 const NEW_TOY_WEIGHT = 12;         // только что купленная игрушка выпадает почти сразу
 
 // Колода приходит зашифрованной (deck.js) и заполняется после ввода пароля
@@ -16,8 +20,8 @@ let TOYS = [], PENALTIES = [], CARDS = [];
 const NAME = { M: 'ОН', F: 'ОНА' };
 const TYPE = {
   scenario: { one: 'Сценарий', many: 'Сценарии', sym: '✦', desc: 'Один на 3 часа' },
-  pose: { one: 'Поза', many: 'Позы', sym: '❦', desc: `До ${MAX_PER_GAME} за игру` },
-  action: { one: 'Действие', many: 'Действия', sym: '✧', desc: `До ${MAX_PER_GAME} за игру` },
+  pose: { one: 'Поза', many: 'Позы', sym: '❦', desc: 'Одна за ход' },
+  action: { one: 'Действие', many: 'Действия', sym: '✧', desc: 'Одно за ход' },
 };
 const RESULT = {
   play: 'начали', plan: 'в планы', later: 'потом', never: 'никогда', skip: 'пропуск хода',
@@ -44,6 +48,10 @@ function emptyState() {
     playing: null,        // { id, leader, start }
     drawn: null,          // { id, from } — вытянутая карта ждёт решения
     newToy: null,         // только что купленная игрушка — с неё начинается следующая игра
+    turnUsed: {},         // тип → уже взят в этом ходе (за ход — 1 сценарий, 1 поза, 1 действие)
+    turnLater: 0,         // сколько раз за ход нажали «Давай потом»
+    stats: {},            // id → { p: сыграли, l: откладывали } — рейтинг карты
+    shown: {},            // id → сколько раз выпадала — очередь для карт без рейтинга
     turnPlays: 0,         // сколько карт взято в игру за текущий ход
     fav: {},
     never: {},
@@ -191,6 +199,7 @@ function canDraw(type) {
   if (!state.leader) return 'Сначала выберите ведущего';
   if (type === 'scenario' && state.scenario) return 'Сценарий уже идёт — переиграть нельзя';
   if (type !== 'scenario' && state.when === 'now' && used(type) >= MAX_PER_GAME) return `${TYPE[type].many} на эту игру закончились`;
+  if ((state.turnUsed || {})[type]) return `${TYPE[type].one} в этом ходе уже есть. Дальше — «Ход сделан»`;
   return '';
 }
 
@@ -205,15 +214,45 @@ function fits(card, L) {
   return true;
 }
 
+// Рейтинг карты: избранное и частая игра поднимают, «Давай потом» опускает,
+// «слишком игровые» сценарии сегодня почти не выпадают
+function cardWeight(c) {
+  const st = (state.stats || {})[c.id] || {};
+  let w = state.fav[c.id] ? FAV_WEIGHT : 1;
+  if (c.joker) w *= JOKER_WEIGHT;
+  if (st.p) w *= 1 + Math.min(st.p, 5) * 0.2;
+  if (st.l) w *= Math.pow(0.8, st.l);
+  if (c.rare && state.when === 'now') w *= RARE_WEIGHT;
+  if (state.newToy && usesToy(c, state.newToy)) w *= NEW_TOY_WEIGHT;   // новинка — первой
+  return w;
+}
+
+// Карта без рейтинга — нейтральная: такие идут по очереди, пока не выпадут все
+function isNeutral(c) {
+  const st = (state.stats || {})[c.id];
+  return !state.fav[c.id] && !(st && (st.p || st.l)) && !c.rare && !c.joker && !(state.newToy && usesToy(c, state.newToy));
+}
+
 function pickRandom(type) {
   const L = state.leader;
   const laterIds = new Set(state.later.map(x => x.id));
-  const pool = CARDS.filter(c => c.type === type && fits(c, L) && !laterIds.has(c.id));
+  let pool = CARDS.filter(c => c.type === type && fits(c, L) && !laterIds.has(c.id));
   if (!pool.length) return null;
+  // подарок ходов: джокер обязательно выпадет хотя бы раз, не обязательно первым
+  const g = state.forced && state.forced.gift && !state.forced.jokerDone ? state.forced : null;
+  if (g) {
+    const joker = pool.find(c => c.joker);
+    if (joker && Math.random() < 1 / Math.max(1, g.left)) return joker;
+  }
+  const shown = state.shown || {};
+  const neutral = pool.filter(isNeutral);
+  if (neutral.length) {
+    const minShown = Math.min(...neutral.map(c => shown[c.id] || 0));
+    pool = pool.filter(c => !isNeutral(c) || (shown[c.id] || 0) === minShown);
+  }
   const t = now();
   const weights = pool.map(c => {
-    let w = state.fav[c.id] ? FAV_WEIGHT : 1;
-    if (state.newToy && usesToy(c, state.newToy)) w *= NEW_TOY_WEIGHT;   // новинка — первой
+    let w = cardWeight(c);
     const seen = state.seen[c.id];
     if (seen && t - seen < 24 * 60 * MIN) w *= 0.25;   // недавно выпадала — реже
     return w;
@@ -235,8 +274,14 @@ function pendingFor(type) {
 // Ход — это всё, что ведущий взял в игру: сценарий, позы, действия вместе.
 // Ход закончился: закреплённые ходы (штраф, подарок) идут вниз,
 // «по очереди» ведущий меняется, со стрелкой — крутим заново
-function endTurn() {
+function resetTurn() {
   state.turnPlays = 0;
+  state.turnUsed = {};
+  state.turnLater = 0;
+}
+
+function endTurn() {
+  resetTurn();
   if (state.forced) {
     state.forced.left--;
     if (state.forced.left > 0) { state.leader = state.forced.who; return; }
@@ -244,6 +289,20 @@ function endTurn() {
   }
   if (state.pickMode === 'turns' && state.leader) state.leader = other(state.leader);
   else state.leader = null;
+}
+
+// Взяли карту в игру (или в планы): за ход — одна карта каждого типа; рейтинг растёт
+function markPlayed(card) {
+  if (!state.turnUsed) state.turnUsed = {};
+  state.turnUsed[card.type] = true;
+  stat(card.id).p++;
+}
+
+// Ход уходит партнёру со штрафом: пропуск, слишком много «потом»
+function passTurn(L, reason) {
+  if (state.forced) endTurn();
+  else { resetTurn(); state.leader = other(L); }
+  ui.modal = { type: 'punish', who: L, reason };
 }
 
 // Закрыть карту, которая шла, — когда ведущий берёт следующую
@@ -258,6 +317,11 @@ function closePlaying() {
 function usesToy(card, id) {
   const lists = [card.needs, card.uses, card.buy, card.M && card.M.uses, card.F && card.F.uses];
   return lists.some(l => (l || []).some(n => n.split('|').includes(id)));
+}
+
+function stat(id) {
+  if (!state.stats) state.stats = {};
+  return state.stats[id] || (state.stats[id] = { p: 0, l: 0 });
 }
 
 function removeLater(id) { state.later = state.later.filter(x => x.id !== id); }
@@ -310,7 +374,11 @@ const actions = {
     }
     const card = pickRandom(d.t);
     if (!card) return toast('Подходящих карт нет — загляните в арсенал или остроту');
-    state.seen[card.id] = now(); save();
+    state.seen[card.id] = now();
+    if (!state.shown) state.shown = {};
+    state.shown[card.id] = (state.shown[card.id] || 0) + 1;
+    if (card.joker && state.forced && state.forced.gift) state.forced.jokerDone = true;
+    save();
     ui.screen = 'shuffle';
     render();
     setTimeout(() => { ui.screen = 'card'; state.drawn = { id: card.id, from: 'deck' }; save(); render(); window.scrollTo(0, 0); }, 1400);
@@ -340,6 +408,7 @@ const actions = {
       const toBuy = needs.concat((card.buy || []).filter(id => !hasToy(id)));
       toBuy.forEach(id => { if (!state.shop.includes(id)) state.shop.push(id); });
       log(card.id, 'plan', Object.assign({ L: topFor(card, state.leader) }, jokerWish()));
+      markPlayed(card);
       state.turnPlays++; save();
       ui.screen = 'dash'; state.drawn = null; save();
       toast(toBuy.length ? 'В планах. Покупки — в списке «Купить»' : 'Запланировано на следующий раз');
@@ -353,6 +422,7 @@ const actions = {
     state.playing = { id: card.id, leader: top, start: now() };
     log(card.id, 'play', Object.assign({ L: top }, jokerWish()));
     if (state.newToy && usesToy(card, state.newToy)) state.newToy = null;   // новинку обыграли
+    markPlayed(card);
     state.turnPlays++; save();
     ui.screen = 'playing'; state.drawn = null; save();
     window.scrollTo(0, 0);
@@ -364,11 +434,32 @@ const actions = {
     removeLater(card.id);
     state.later.push({ id: card.id, ts: now(), plan: wasPlan || state.when === 'next' });
     log(card.id, 'later');
+    const st = stat(card.id);
+    st.l++;
+    state.turnLater = (state.turnLater || 0) + 1;
+    ui.screen = 'dash'; state.drawn = null;
+    if (st.l >= LATER_TO_NEVER) {
+      state.never[card.id] = true;
+      removeLater(card.id);
+      toast(`Карту откладывали ${LATER_TO_NEVER} раз — она ушла в «Никогда». Вернуть можно в Настройках`);
+    } else toast(`Отложено. «Потом» в этом ходе: ${state.turnLater} из ${LATER_PER_TURN}`);
+    if (state.turnLater >= LATER_PER_TURN) passTurn(state.leader, `${LATER_PER_TURN} раз «Давай потом» за ход`);
     save();
-    ui.screen = 'dash'; state.drawn = null; save();
-    toast('Отложено — в следующий раз предложим первой');
   },
   never() { ui.modal = { type: 'never' }; },
+  // джокер: вместо своей фантазии — любая карта этой колоды или из избранного
+  jokerPick() {
+    ui.jokerPick = byId(state.drawn.id).type;
+    ui.deckType = ui.jokerPick;
+    ui.screen = 'deck';
+    window.scrollTo(0, 0);
+  },
+  jokerPlay(d) {
+    ui.jokerPick = null;
+    state.drawn = { id: d.id, from: 'joker' };
+    return actions.play();
+  },
+  jokerBack() { ui.jokerPick = null; ui.screen = 'card'; },
   // отказ стать нижним по мазо-карте: карта не пропадает, ведущему — красная карточка
   refuseSwitch() {
     const L = state.leader;
@@ -384,7 +475,7 @@ const actions = {
     log(card.id, 'never');
     state.forced = { who: other(L), left: FORCED_TURNS };
     state.leader = other(L);
-    state.turnPlays = 0;
+    resetTurn();
     save();
     ui.screen = 'dash'; state.drawn = null; save();
     ui.modal = { type: 'punish', who: L, reason: '«Никогда»' };
@@ -401,11 +492,9 @@ const actions = {
   skipYes() {
     const L = state.leader;
     log(state.drawn ? state.drawn.id : null, 'skip');
-    state.leader = other(L);
-    state.turnPlays = 0;
+    ui.screen = 'dash'; state.drawn = null;
+    passTurn(L, 'пропуск хода');
     save();
-    ui.screen = 'dash'; state.drawn = null; save();
-    ui.modal = { type: 'punish', who: L, reason: 'пропуск хода' };
   },
 
   // идёт игра
@@ -473,10 +562,10 @@ const actions = {
   },
 
   // навигация
-  go(d) { ui.back = ui.screen; ui.screen = d.s; window.scrollTo(0, 0); },
+  go(d) { ui.back = ui.screen; ui.screen = d.s; ui.jokerPick = null; window.scrollTo(0, 0); },
   openDrawn() { ui.screen = 'card'; window.scrollTo(0, 0); },
   openPlaying() { ui.screen = 'playing'; window.scrollTo(0, 0); },
-  home() { ui.screen = 'dash'; window.scrollTo(0, 0); },
+  home() { ui.screen = 'dash'; ui.jokerPick = null; window.scrollTo(0, 0); },
   view(d) { ui.peek = d.id; },
   viewPlayed(d) { ui.peek = d.id; ui.deckFor = d.l; },
 
@@ -546,7 +635,7 @@ const actions = {
     const n = ui.modal.n;
     state.forced = { who: to, left: n, gift: true };
     state.leader = to;
-    state.turnPlays = 0;
+    resetTurn();
     state.log.push({ ts: now(), id: null, L: to, r: 'gift', note: `${turns(n)} в подарок` });
     save();
     ui.modal = null;
@@ -698,8 +787,8 @@ function dashView() {
   } else {
     h += deckBtn('scenario', '');
   }
-  h += deckBtn('pose', state.when === 'now' ? `${used('pose')} / ${MAX_PER_GAME}` : '') + playedChips('pose');
-  h += deckBtn('action', state.when === 'now' ? `${used('action')} / ${MAX_PER_GAME}` : '') + playedChips('action');
+  h += deckBtn('pose', (state.turnUsed || {}).pose ? '✓ в ходе' : '') + playedChips('pose');
+  h += deckBtn('action', (state.turnUsed || {}).action ? '✓ в ходе' : '') + playedChips('action');
   h += state.turnPlays
     ? `<div class="who-row"><button class="btn" data-act="turnDone">Ход сделан — ${turnDoneText()}</button></div>`
     : f ? '' : `<div class="who-row"><button class="btn ghost small" data-act="skip">Пропустить ход (штраф)</button></div>`;
@@ -824,7 +913,8 @@ function cardScreen() {
   else if (state.drawn.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
   else h += `<div style="height:44px"></div>`;
   h += cardHtml(card, topFor(card, L));
-  if (card.joker) h += `<div class="sec">Моя фантазия</div><textarea id="jokerWish" class="field" rows="3" placeholder="Что именно ты хочешь. Партнёр увидит это в журнале — потом"></textarea>`;
+  if (card.joker) h += `<div class="sec">Моя фантазия</div><textarea id="jokerWish" class="field" rows="3" placeholder="Что именно ты хочешь. Партнёр увидит это в журнале — потом"></textarea>
+    <div class="who-row"><button class="btn gold" data-act="jokerPick">★ Выбрать любую карту: ${TYPE[card.type].many.toLowerCase()} и избранное</button></div>`;
   h += card.switch
     ? `<div class="card-actions">
     <button class="btn primary" data-act="play">Принимаю — я ${L === 'F' ? 'нижняя' : 'нижний'}</button>
@@ -943,6 +1033,7 @@ function settingsView() {
 
 // Вся колода: просмотр любой карты в версии для ведущего ОН или ОНА
 function deckView() {
+  if (ui.jokerPick) return jokerDeckView();
   const t = ui.deckType || 'scenario';
   const lead = ui.deckLead || 'M';
   const list = CARDS.filter(c => c.type === t && (!c.leaders || c.leaders.includes(lead)));
@@ -958,6 +1049,25 @@ function deckView() {
       <span class="meta" style="white-space:nowrap">${peppers(c.lvl || 1)} ${duration(c.min, true)}</span>
     </li>`).join('');
   return h + '</ul>';
+}
+
+// Джокер: любая карта той же колоды, избранное — сверху
+function jokerDeckView() {
+  const t = ui.jokerPick;
+  const L = state.leader;
+  const ok = CARDS.filter(c => c.type === t && !c.joker && !state.never[c.id] && (!c.leaders || c.leaders.includes(topFor(c, L))));
+  const favs = ok.filter(c => state.fav[c.id]);
+  const rest = ok.filter(c => !state.fav[c.id]);
+  const row = c => `<li>
+      <span>${c.switch ? '⇅' : TYPE[c.type].sym}</span>
+      <button class="grow" style="text-align:left" data-act="view" data-id="${c.id}"><div>${esc(cardFor(c, topFor(c, L)).title)}</div><div class="meta">${esc(c.teaser || '')}</div></button>
+      <button class="btn small gold" data-act="jokerPlay" data-id="${c.id}">▶ Играть</button>
+    </li>`;
+  let h = `<button class="back" data-act="jokerBack">‹ К джокеру</button><h1 style="font-size:30px;margin:6px 0 4px">★ Джокер</h1>
+    <p class="lead" style="color:var(--muted);margin:0">Выбери любую карту — ${TYPE[t].many.toLowerCase()}. Нажми на название, чтобы прочитать, «Играть» — чтобы взять в игру.</p>`;
+  if (favs.length) h += `<div class="sec">Избранное</div><ul class="list">${favs.map(row).join('')}</ul>`;
+  h += `<div class="sec">Вся колода</div><ul class="list">${rest.map(row).join('')}</ul>`;
+  return h;
 }
 
 function journalView() {
@@ -1035,7 +1145,9 @@ function modalView() {
       <ul class="rules">
         <li>Вас двое: <b>ОН</b> и <b>ОНА</b>. Один <b>ведёт</b>, второй <b>подчиняется сценарию</b> — полностью.</li>
         <li>Ведущего выбирает <b>стрелка</b> или играете <b>по очереди</b>.</li>
-        <li>Три колоды. <b>Сценарий</b> — один на 3 часа, переиграть нельзя. <b>Позы</b> и <b>Действия</b> — до ${MAX_PER_GAME} каждого за игру. Колоды независимы: можно тянуть только действие.</li>
+        <li>Три колоды. За один ход — <b>1 сценарий, 1 поза и 1 действие</b>, не больше. Сценарий держится 3 часа. Колоды независимы: можно тянуть только действие.</li>
+        <li><b>«Давай потом»</b> — не больше ${LATER_PER_TURN - 1} раз за ход: ${LATER_PER_TURN}-й — красная карточка и ход партнёру. Карта, которую отложили ${LATER_TO_NEVER} раз, сама уходит в «Никогда» (вернуть — в Настройках).</li>
+        <li><b>★ Джокер</b> выпадает чаще других: воплоти любую фантазию — или выбери любую карту из колоды или избранного. При подарке ходов джокер выпадет обязательно.</li>
         <li>Выпала карта — решай: <b>Играем</b>, <b>Потом</b> (в следующий раз предложим её первой) или <b>Никогда</b> — карта исчезнет навсегда, ход уйдёт партнёру на ${FORCED_TURNS} раза, а он может показать <b>красную карточку</b>.</li>
         <li>Можно прочитать карту вслух, а можно нажать «Играем», положить телефон <b>экраном вниз</b> и устроить сюрприз. Проверить, что выпало, — потом, в журнале.</li>
         <li>Пропустил ход или отказался подчиняться — <b>штраф</b> на выбор партнёра.</li>
