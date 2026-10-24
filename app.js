@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 44;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 45;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -60,6 +60,7 @@ function emptyState() {
     playing: null,        // { id, leader, start }
     drawn: null,          // { id, from } — вытянутая карта ждёт решения
     newToy: null,         // только что купленная игрушка — с неё начинается следующая игра
+    customCards: [],      // свои карты пары: { id: 'my-…', type, title, lvl, min, steps, mine: true }
     stopWord: '',         // стоп-слово пары — видно на паузе, в правилах и на острых картах
     penaltyDue: null,     // { who, title, text, ts } — наказание назначено и не выполнено: игра стоит
     turnUsed: {},         // тип → уже взят в этом ходе (за ход — 1 сценарий, 1 поза, 1 действие)
@@ -87,7 +88,22 @@ function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
 }
 
+// Дубли, слитые в одну карту: старый id → оставшаяся карта (журнал, избранное и т. п.)
+const MERGED = {
+  'bd-count': 'ac-spank', 'bs-maid-strict': 'sc-maid', 'ac-nuru': 'po-oil-slide',
+  'ac-couples-tease': 'ac-remote-home', 'bs-stripper': 'sc-strip-club', 'ac-on-command': 'ac-countdown',
+  'po-seated-reverse': 'po-living-chair', 'po-office-chair': 'po-chair', 'sc-blind-date': 'sc-strangers',
+};
 let state = load();
+// перенести отметки со слитых карт на оставшиеся
+for (const [from, to] of Object.entries(MERGED)) {
+  for (const k of ['fav', 'never', 'stats', 'shown', 'seen']) {
+    const m = state[k];
+    if (m && m[from] !== undefined) { if (m[to] === undefined) m[to] = m[from]; delete m[from]; }
+  }
+}
+state.later.forEach(x => { x.id = MERGED[x.id] || x.id; });
+state.later = state.later.filter((x, i, a) => a.findIndex(y => y.id === x.id) === i);
 for (const id of ['jk-scenario', 'jk-pose', 'jk-action']) delete state.never[id];   // джокер нельзя потерять
 
 // Экран и всплывающие окна — не сохраняются
@@ -106,7 +122,7 @@ const ui = {
 const $ = sel => document.querySelector(sel);
 const now = () => Date.now();
 const other = L => (L === 'M' ? 'F' : 'M');
-const byId = id => CARDS.find(c => c.id === id);
+const byId = id => CARDS.find(c => c.id === (MERGED[id] || id));
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -734,6 +750,29 @@ const actions = {
   clearLaterYes() { state.later = []; save(); ui.modal = null; toast('Отложенное очищено'); },
   peekUnlater() { removeLater(ui.peek); save(); ui.peek = null; ui.deckFor = null; toast('Убрано из отложенного'); },
   unfav(d) { delete state.fav[d.id]; save(); },
+  // свои карты
+  addCustom() {
+    const title = $('#myTitle').value.trim();
+    const steps = $('#myText').value.split('\n').map(x => x.trim()).filter(Boolean);
+    if (!title || !steps.length) return toast('Нужны название и хотя бы одна строка описания');
+    const card = { id: 'my-' + now(), type: $('#myType').value, title, lvl: +$('#myLvl').value, min: +$('#myMin').value || 15,
+      teaser: 'Своя карта', steps, mine: true };
+    if (!state.customCards) state.customCards = [];
+    state.customCards.push(card);
+    CARDS.push(card);
+    save(); toast(`«${title}» — в колоде`);
+  },
+  delCustom(d) {
+    state.customCards = (state.customCards || []).filter(c => c.id !== d.id);
+    CARDS = CARDS.filter(c => c.id !== d.id);
+    removeLater(d.id); delete state.fav[d.id];
+    save();
+  },
+  // недоступные карты: нужная игрушка — сразу в «Купить»
+  shopNeed(d) {
+    if (!state.shop.includes(d.id)) state.shop.push(d.id);
+    save(); toast(`${toyName(d.id)} — в списке «Купить»`);
+  },
   setStopWord() {
     state.stopWord = $('#stopWord').value.trim();
     save(); toast(state.stopWord ? `Стоп-слово: «${state.stopWord}»` : 'Стоп-слово очищено');
@@ -1128,6 +1167,40 @@ function peekView() {
   </div></div>`;
 }
 
+// Карты, которые в «Сейчас» не выпадают из-за недостающих игрушек — по игрушке
+function unavailableHtml() {
+  const groups = {};
+  for (const c of CARDS) {
+    if (c.joker || c.when === 'next' || state.never[c.id] || (c.lvl || 1) > state.lvlMax) continue;
+    for (const n of missingNeeds(c)) (groups[n] = groups[n] || []).push(c);
+  }
+  const keys = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
+  let h = `<div class="set-sec"><h2>Недоступно сейчас</h2><p class="lead">Эти карты в режиме «Сейчас» не выпадают — не хватает игрушки. Нажмите, чтобы увидеть карты; «В Купить» — добавить в список покупок.</p>`;
+  if (!keys.length) return h + `<div class="empty">Всё доступно — арсенал полный</div></div>`;
+  h += keys.map(n => {
+    const first = n.split('|')[0];
+    return `<details class="unav"><summary><span class="grow">${n.split('|').map(toyName).map(esc).join(' или ')}</span><span class="meta">${groups[n].length} ${plural(groups[n].length, 'карта', 'карты', 'карт')}</span></summary>
+      <ul class="list">${groups[n].map(c => `<li><span>${TYPE[c.type].sym}</span><button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(c.title)}</button></li>`).join('')}</ul>
+      ${state.shop.includes(first) ? '<div class="meta">✓ уже в «Купить»</div>' : `<button class="btn small gold" data-act="shopNeed" data-id="${first}">В «Купить»: ${esc(toyName(first))}</button>`}
+    </details>`;
+  }).join('');
+  return h + '</div>';
+}
+
+// Свои карты пары
+function customHtml() {
+  const mine = state.customCards || [];
+  return `<div class="set-sec"><h2>Свои карты</h2><p class="lead">Ваша идея — новая карта в колоде. Каждая строка описания станет шагом.</p>
+    ${mine.length ? `<ul class="list">${mine.map(c => `<li><span>✎</span><button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(c.title)}<div class="meta">${TYPE[c.type].one} · ${peppers(c.lvl)}</div></button><button class="x" data-act="delCustom" data-id="${c.id}">удалить</button></li>`).join('')}</ul>` : ''}
+    <select id="myType" class="field"><option value="scenario">Сценарий</option><option value="pose">Поза</option><option value="action" selected>Действие</option></select>
+    <input id="myTitle" class="field" placeholder="Название">
+    <textarea id="myText" class="field" rows="4" placeholder="Что делать — по шагу на строку"></textarea>
+    <div class="addrow"><select id="myLvl" class="field"><option value="1">🌶</option><option value="2" selected>🌶🌶</option><option value="3">🌶🌶🌶</option></select>
+      <input id="myMin" class="field" type="number" inputmode="numeric" min="1" value="15" placeholder="минут">
+      <button class="btn small" data-act="addCustom">Добавить</button></div>
+  </div>`;
+}
+
 function settingsView() {
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Настройки</h1>`;
 
@@ -1163,6 +1236,8 @@ function settingsView() {
       : `<div class="empty">Пусто</div>`;
     return s + `</div>`;
   };
+  h += unavailableHtml();
+  h += customHtml();
   h += list('Избранное', 'Эти карты выпадают в три раза чаще.', Object.keys(state.fav), 'unfav', 'убрать');
   h += list('Отложено и в планах', 'Предлагаются первыми в следующей игре. Убрать можно по одной или все сразу.', state.later.map(x => x.id), 'unlater', 'убрать');
   if (state.later.length) h += `<div class="who-row"><button class="btn ghost small" data-act="clearLater">Очистить всё отложенное</button></div>`;
@@ -1194,21 +1269,44 @@ function deckView() {
   const lead = ui.deckLead || 'M';
   // карты с пометкой pos встают на своё место в списке (pos: 8 — восьмая строка),
   // остальные перемешаны раз и навсегда, чтобы новые партии не шли хвостом в конце
-  const all = CARDS.filter(c => c.type === t && (!c.leaders || c.leaders.includes(lead)));
-  const list = all.filter(c => !c.pos).sort(byMix);
-  all.filter(c => c.pos).sort((a, b) => a.pos - b.pos).forEach(c => list.splice(Math.min(c.pos - 1, list.length), 0, c));
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Колода</h1>
     <p class="lead" style="color:var(--muted);margin:0">Всего карт: ${CARDS.length}. Нажмите на карту, чтобы открыть её целиком.</p>
+    <input id="deckSearch" class="field" type="search" placeholder="Поиск: врач, наручники, ванна…" value="${esc(ui.deckQuery || '')}" autocomplete="off">
     <div class="seg">${Object.keys(TYPE).map(k => `<button class="${t === k ? 'on' : ''}" data-act="deckType" data-t="${k}">${TYPE[k].many} · ${CARDS.filter(c => c.type === k).length}</button>`).join('')}</div>
     <div class="seg"><button class="${lead === 'M' ? 'on' : ''}" data-act="deckLead" data-l="M">Ведёт ОН</button><button class="${lead === 'F' ? 'on' : ''}" data-act="deckLead" data-l="F">Ведёт ОНА</button></div>
-    <ul class="list" style="margin-top:12px">`;
-  h += list.map(c => `<li data-act="deckView" data-id="${c.id}">
-      <span>${c.joker ? '★' : TYPE[c.type].sym}</span>
+    <ul class="list" id="deckList" style="margin-top:12px">${deckListHtml()}</ul>`;
+  return h;
+}
+
+// Строки каталога: с поиском — по всем колодам, без поиска — выбранная колода
+function deckListHtml() {
+  const t = ui.deckType || 'scenario';
+  const lead = ui.deckLead || 'M';
+  const q = (ui.deckQuery || '').trim();
+  const ok = c => !c.leaders || c.leaders.includes(lead);
+  let list;
+  if (q) list = CARDS.filter(c => ok(c) && matches(c, q)).sort(byMix);
+  else {
+    const all = CARDS.filter(c => c.type === t && ok(c));
+    // карты с пометкой pos встают на своё место (pos: 8 — восьмая строка), остальные — в постоянном перемешанном порядке
+    list = all.filter(c => !c.pos).sort(byMix);
+    all.filter(c => c.pos).sort((a, b) => a.pos - b.pos).forEach(c => list.splice(Math.min(c.pos - 1, list.length), 0, c));
+  }
+  if (!list.length) return `<li class="empty">Ничего не нашлось</li>`;
+  return list.map(c => `<li data-act="deckView" data-id="${c.id}">
+      <span>${c.joker ? '★' : c.mine ? '✎' : TYPE[c.type].sym}</span>
       <div class="grow"><div>${esc(cardFor(c, lead).title)}${state.never[c.id] ? ' <span class="res never">никогда</span>' : ''}</div>
-        <div class="meta">${esc(c.teaser || '')}</div></div>
+        <div class="meta">${q ? TYPE[c.type].one + ' · ' : ''}${esc(c.teaser || '')}</div></div>
       <span class="meta" style="white-space:nowrap">${peppers(c.lvl || 1)} ${duration(c.min, true)}</span>
     </li>`).join('');
-  return h + '</ul>';
+}
+
+// Поиск: все слова запроса должны найтись в названиях, тексте, ключевых словах или игрушках карты
+function matches(c, q) {
+  const text = [c.title, c.M && c.M.title, c.F && c.F.title, c.teaser, c.intro, c.keys,
+    JSON.stringify(c.steps || []), JSON.stringify(c.M || {}), JSON.stringify(c.F || {}),
+    [...(c.needs || []), ...(c.uses || [])].flatMap(n => n.split('|')).map(toyName).join(' ')].join(' ').toLowerCase().replace(/ё/g, 'е');
+  return q.toLowerCase().replace(/ё/g, 'е').split(/\s+/).every(w => text.includes(w));
 }
 
 // Постоянный «перемешанный» порядок каталога: по хэшу id, одинаковый на любом телефоне.
@@ -1225,7 +1323,8 @@ function byMix(a, b) { return mixKey(a) - mixKey(b); }
 function jokerDeckView() {
   const t = ui.jokerPick;
   const L = state.leader;
-  const ok = CARDS.filter(c => c.type === t && !c.joker && !state.never[c.id] && (!c.leaders || c.leaders.includes(topFor(c, L))));
+  const q = (ui.deckQuery || '').trim();
+  const ok = CARDS.filter(c => c.type === t && !c.joker && !state.never[c.id] && (!c.leaders || c.leaders.includes(topFor(c, L))) && (!q || matches(c, q)));
   const favs = ok.filter(c => state.fav[c.id]).sort(byMix);
   const rest = ok.filter(c => !state.fav[c.id]).sort(byMix);
   const row = c => `<li>
@@ -1234,10 +1333,12 @@ function jokerDeckView() {
       <button class="btn small gold" data-act="jokerPlay" data-id="${c.id}">▶ Играть</button>
     </li>`;
   let h = `<button class="back" data-act="jokerBack">‹ К джокеру</button><h1 style="font-size:30px;margin:6px 0 4px">★ Джокер</h1>
-    <p class="lead" style="color:var(--muted);margin:0">Выбери любую карту — ${TYPE[t].many.toLowerCase()}. Нажми на название, чтобы прочитать, «Играть» — чтобы взять в игру.</p>`;
+    <p class="lead" style="color:var(--muted);margin:0">Выбери любую карту — ${TYPE[t].many.toLowerCase()}. Нажми на название, чтобы прочитать, «Играть» — чтобы взять в игру.</p>
+    <input id="jokerSearch" class="field" type="search" placeholder="Поиск: врач, проститутка, связать…" value="${esc(ui.deckQuery || '')}" autocomplete="off">
+    <div id="jokerList">`;
   if (favs.length) h += `<div class="sec">Избранное</div><ul class="list">${favs.map(row).join('')}</ul>`;
-  h += `<div class="sec">Вся колода</div><ul class="list">${rest.map(row).join('')}</ul>`;
-  return h;
+  h += `<div class="sec">${q ? 'Нашлось' : 'Вся колода'}</div><ul class="list">${rest.map(row).join('') || '<li class="empty">Ничего не нашлось</li>'}</ul>`;
+  return h + '</div>';
 }
 
 function journalView() {
@@ -1517,6 +1618,11 @@ async function wakeLock() {
 }
 function releaseWake() { try { wake && wake.release(); } catch (e) {} wake = null; }
 
+document.addEventListener('input', e => {
+  if (e.target.id === 'deckSearch') { ui.deckQuery = e.target.value; $('#deckList').innerHTML = deckListHtml(); }
+  if (e.target.id === 'jokerSearch') { ui.deckQuery = e.target.value; const box = document.createElement('div'); box.innerHTML = jokerDeckView(); $('#jokerList').replaceWith(box.querySelector('#jokerList')); }
+});
+
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -1562,6 +1668,7 @@ async function decryptWith(key) {
   const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(DECK.iv) }, key, fromB64(DECK.data));
   const deck = new Function(new TextDecoder().decode(plain) + '\nreturn { TOYS, PENALTIES, CARDS };')();
   ({ TOYS, PENALTIES, CARDS } = deck);
+  CARDS = CARDS.concat(state.customCards || []);   // свои карты пары — в общую колоду
 }
 
 // Пароль -> ключ; ключ запоминаем на телефоне, чтобы не спрашивать снова

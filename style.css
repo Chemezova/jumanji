@@ -278,6 +278,13 @@ textarea.field { resize: vertical; font: inherit; }
 .toggle.on::after { transform: translateX(20px); background: #fff; }
 .addrow { display: flex; gap: 8px; margin-top: 10px; }
 .addrow .field { margin: 0; }
+details.unav { border-bottom: 1px solid var(--line); padding: 10px 2px; }
+details.unav summary { display: flex; gap: 10px; align-items: center; cursor: pointer; list-style: none; }
+details.unav summary::-webkit-details-marker { display: none; }
+details.unav[open] summary { color: var(--gold); }
+details.unav .btn { margin-top: 8px; }
+#deckSearch, #jokerSearch { margin-top: 12px; }
+.set-sec select.field, .set-sec textarea.field { margin-top: 8px; }
 .x { color: var(--muted); padding: 6px 8px; font-size: 14px; }
 
 /* ---------- Журнал ---------- */
