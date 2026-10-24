@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 49;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 50;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -25,7 +25,8 @@ const AUTHOR_IDS = new Set([
   'buy-shackles', 'buy-douche', 'buy-bdsm-kit', 'buy-any',
 ]);          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
-const PASS_PER_TURN = 3;          // «Не сейчас» — перебрать карты, без штрафа
+const PREP_DAYS = 7;               // за сколько дней назначенное попадает в «Рекомендую приготовиться»
+const PASS_PER_TURN = 3;          // «Не сейчас»: третий за ход отдаёт ход партнёру (без штрафа)
 const LATER_PER_TURN = 5;          // пятое «потом» за ход — красная карточка и ход партнёру
 const LATER_TO_NEVER = 10;         // столько раз отложили — карта уходит в «Никогда»
 const NEW_TOY_WEIGHT = 12;         // только что купленная игрушка выпадает почти сразу
@@ -382,9 +383,8 @@ function waitDecision() {
 function passBtn() {
   if (state.drawn && state.drawn.from !== 'deck') return '';
   const left = inGift() ? Infinity : PASS_PER_TURN - (state.turnPass || 0);
-  return left > 0
-    ? `<button class="btn ghost" style="grid-column:1/-1" data-act="pass">Не сейчас${left === Infinity ? '' : ` · осталось ${left}`}</button>`
-    : `<button class="btn ghost" style="grid-column:1/-1" disabled>Пропуски на этот ход кончились</button>`;
+  const note = left === Infinity ? '' : left <= 1 ? ' · последний, дальше ход партнёру' : ` · осталось ${left}`;
+  return `<button class="btn ghost" style="grid-column:1/-1" data-act="pass">Не сейчас${note}</button>`;
 }
 
 function resetTurn() {
@@ -569,10 +569,24 @@ const actions = {
   // «Отложить» и «Играем» в режиме «на следующий раз» — сначала назначить день
   schedule(d) { ui.modal = { type: 'schedule', mode: d.mode || 'later', day: '' }; },
   scheduleDay(d) { ui.modal.day = d.day; },
+  moveLater(d) { ui.modal = { type: 'schedule', mode: 'move', id: d.id, day: '' }; },
+  calDay(d) { ui.calDay = d.day; },
+  calMove(d) {
+    const [y, m] = (ui.calMonth || today().slice(0, 7)).split('-').map(Number);
+    const t = new Date(y, m - 1 + +d.n, 1);
+    ui.calMonth = `${t.getFullYear()}-${pad2(t.getMonth() + 1)}`;
+  },
   scheduleGo() {
     const day = ui.modal.day || ($('#planDay') && $('#planDay').value);
     if (!day) return toast('Выберите день');
     const mode = ui.modal.mode;
+    if (mode === 'move') {
+      const x = state.later.find(x => x.id === ui.modal.id);
+      ui.modal = null;
+      if (x) { x.day = day; save(); }
+      ui.calDay = day; ui.calMonth = day.slice(0, 7);
+      return toast(`Перенесено на ${dayLabel(day)}`);
+    }
     ui.modal = null;
     return mode === 'plan' ? actions.plan({ day }) : actions.later({ day });
   },
@@ -597,11 +611,15 @@ const actions = {
   // «Не сейчас» — карта молча возвращается в колоду, сразу тянем следующую
   pass() {
     const card = byId(state.drawn.id);
-    if (!inGift()) {
-      if ((state.turnPass || 0) >= PASS_PER_TURN) return toast('Пропуски на этот ход кончились');
+    state.drawn = null;
+    if (!inGift()) {   // в подарок — перебирать сколько угодно
       state.turnPass = (state.turnPass || 0) + 1;
+      if (state.turnPass >= PASS_PER_TURN) {   // третий пропуск — ход переходит, без штрафа
+        endTurn(); save(); ui.screen = 'dash';
+        return toast(`${PASS_PER_TURN} пропуска — ход переходит` + (state.leader ? `: ведёт ${NAME[state.leader]}` : '. Крутите стрелку заново'));
+      }
     }
-    state.drawn = null; save();
+    save();
     return actions.draw({ t: card.type });
   },
   never() { ui.modal = { type: 'never' }; },
@@ -878,9 +896,10 @@ const actions = {
   clearLog() { ui.modal = { type: 'clearLog' }; },
   clearLogYes() { state.log = []; save(); ui.modal = null; toast('Журнал стёрт'); },
   resetGameYes() {
-    Object.assign(state, { leader: null, forced: null, game: null, scenario: null, playing: null, drawn: null, turnPlays: 0 });
+    Object.assign(state, { leader: null, forced: null, game: null, scenario: null, playing: null, drawn: null, penaltyDue: null, later: [] });
+    resetTurn();
     ui.skipLater = {};
-    save(); ui.modal = null; toast('Текущая игра сброшена');
+    save(); ui.modal = null; toast('Сессия стёрта');
   },
 
   // подарок ходов
@@ -1021,6 +1040,18 @@ function dashView() {
   const todays = state.later.filter(x => x.day && x.day <= today() && byId(x.id));
   if (todays.length) h += `<div class="note gift">📅 По плану на сегодня: ${todays.map(x => `<button class="textlink" style="padding:0" data-act="openPlanned" data-id="${x.id}">${esc(cardFor(byId(x.id), L || 'M').title)}</button>`).join(', ')}</div>`;
 
+  // Ближайшая неделя — «Рекомендую приготовиться»: что впереди и что докупить
+  const week = new Date(); week.setDate(week.getDate() + PREP_DAYS);
+  const soon = state.later.filter(x => x.day && x.day > today() && x.day <= isoDay(week) && byId(x.id))
+    .sort((a, b) => a.day.localeCompare(b.day));
+  if (soon.length) h += `<div class="prep"><div class="sec" style="margin-top:0">Рекомендую приготовиться</div><ul class="list">${soon.map(x => {
+    const c = byId(x.id);
+    const need = missingNeeds(c).map(n => n.split('|').map(toyName).join(' или ')).concat((c.buy || []).filter(id => !hasToy(id)).map(toyName));
+    return `<li><span>${TYPE[c.type].sym}</span><button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(cardFor(c, L || 'M').title)}
+      <div class="meta">${dayLabel(x.day)} · ${peppers(c.lvl)}${need.length ? ` · нужно: ${esc(need.join(', '))}` : ''}</div></button>
+      <button class="x" data-act="moveLater" data-id="${c.id}">перенести</button></li>`;
+  }).join('')}</ul></div>`;
+
   // Невыполненное наказание держит игру
   if (state.penaltyDue) {
     const p = state.penaltyDue;
@@ -1079,8 +1110,7 @@ function dashView() {
 
   // Отложенное
   if (state.later.length) {
-    h += `<div class="zone-title" style="margin:20px 0 8px"><span class="sec" style="margin:0">Отложено и в планах</span>
-      <button class="textlink" style="padding:0" data-act="clearLater">очистить</button></div><div class="links">`;
+    h += `<div class="sec">Отложено и в планах</div><div class="links">`;
     h += state.later.slice().sort((a, b) => (a.day || '').localeCompare(b.day || '')).map(x => {
       const c = byId(x.id);
       return c ? `<button class="chip ${x.plan ? 'buy' : ''}" data-act="view" data-id="${c.id}">${TYPE[c.type].sym} ${esc(cardFor(c, L).title)} · ${dayLabel(x.day)}</button>` : '';
@@ -1276,22 +1306,21 @@ function unavailableHtml() {
     for (const n of missingNeeds(c)) (groups[n] = groups[n] || []).push(c);
   }
   const keys = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
-  let h = `<div class="set-sec"><h2>Недоступно сейчас</h2><p class="lead">Эти карты в режиме «Сейчас» не выпадают — не хватает игрушки. Нажмите, чтобы увидеть карты; «В Купить» — добавить в список покупок.</p>`;
-  if (!keys.length) return h + `<div class="empty">Всё доступно — арсенал полный</div></div>`;
-  h += keys.map(n => {
+  const lead = 'Эти карты в режиме «Сейчас» не выпадают — не хватает игрушки. Нажмите, чтобы увидеть карты; «В Купить» — добавить в список покупок.';
+  if (!keys.length) return fold('unav', 'Недоступно сейчас', lead, `<div class="empty">Всё доступно — арсенал полный</div>`, false);
+  return fold('unav', `Недоступно сейчас <span class="meta">${keys.length}</span>`, lead, keys.map(n => {
     const first = n.split('|')[0];
     return `<details class="unav"><summary><span class="grow">${n.split('|').map(toyName).map(esc).join(' или ')}</span><span class="meta">${groups[n].length} ${plural(groups[n].length, 'карта', 'карты', 'карт')}</span></summary>
       <ul class="list">${groups[n].map(c => `<li><span>${TYPE[c.type].sym}</span><button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(c.title)}</button></li>`).join('')}</ul>
       ${state.shop.includes(first) ? '<div class="meta">✓ уже в «Купить»</div>' : `<button class="btn small gold" data-act="shopNeed" data-id="${first}">В «Купить»: ${esc(toyName(first))}</button>`}
     </details>`;
-  }).join('');
-  return h + '</div>';
+  }).join(''), false);
 }
 
 // Свои карты пары
 function customHtml() {
   const mine = state.customCards || [];
-  return `<div class="set-sec"><h2>Свои карты</h2><p class="lead">Ваша идея — новая карта в колоде. Каждая строка описания станет шагом.</p>
+  return `<div class="set-sec"><h2>Идеи — свои карты</h2><p class="lead">Ваша идея — новая карта в колоде. Каждая строка описания станет шагом.</p>
     ${mine.length ? `<ul class="list">${mine.map(c => `<li><span>✎</span><button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(c.title)}<div class="meta">${TYPE[c.type].one} · ${peppers(c.lvl)}</div></button><button class="x" data-act="delCustom" data-id="${c.id}">удалить</button></li>`).join('')}</ul>` : ''}
     <select id="myType" class="field"><option value="scenario">Сценарий</option><option value="pose">Поза</option><option value="action" selected>Действие</option></select>
     <input id="myTitle" class="field" placeholder="Название">
@@ -1302,51 +1331,111 @@ function customHtml() {
   </div>`;
 }
 
+// Сворачиваемый блок настроек; открыт/закрыт — помним между перерисовками
+function fold(k, title, lead, inner, def) {
+  const open = ui.open && k in ui.open ? ui.open[k] : def;
+  return `<details class="set-sec fold" data-k="${k}" ${open ? 'open' : ''}><summary><h2>${title}</h2></summary>
+    ${lead ? `<p class="lead">${lead}</p>` : ''}${inner}</details>`;
+}
+
+const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+
+// Календарь: ♡ — назначено, ♥ — сыграно, перчики — самая острая карта дня
+function calendarHtml() {
+  const month = ui.calMonth || today().slice(0, 7);
+  const [y, m] = month.split('-').map(Number);
+  const shift = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+  const days = new Date(y, m, 0).getDate();
+  const marks = {};
+  const add = (day, kind, c) => {
+    const o = marks[day] || (marks[day] = { plan: [], played: [], lvl: 0 });
+    o[kind].push(c);
+    o.lvl = Math.max(o.lvl, c.lvl || 1);
+  };
+  for (const x of state.later) { const c = byId(x.id); if (c && x.day) add(x.day, 'plan', x); }
+  for (const e of state.log) { if (e.r === 'play' && byId(e.id)) add(isoDay(new Date(e.ts)), 'played', e); }
+  for (const k in marks) marks[k].lvl = Math.max(0, ...marks[k].plan.map(x => byId(x.id).lvl || 1), ...marks[k].played.map(e => byId(e.id).lvl || 1));
+
+  const sel = ui.calDay || today();
+  let h = `<div class="cal-head"><button class="x" data-act="calMove" data-n="-1">‹</button><b>${MONTHS[m - 1]} ${y}</b><button class="x" data-act="calMove" data-n="1">›</button></div>
+    <div class="cal">${['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'].map(d => `<span class="cal-w">${d}</span>`).join('')}`;
+  h += '<span></span>'.repeat(shift);
+  for (let d = 1; d <= days; d++) {
+    const iso = `${y}-${pad2(m)}-${pad2(d)}`;
+    const o = marks[iso];
+    h += `<button class="cal-d ${iso === today() ? 'today' : ''} ${iso === sel ? 'sel' : ''}" data-act="calDay" data-day="${iso}">
+      <b>${d}</b><span class="h">${o && o.plan.length ? '♡' : ''}${o && o.played.length ? '<i>♥</i>' : ''}</span><span class="pp">${o ? '🌶'.repeat(o.lvl) : ''}</span></button>`;
+  }
+  h += `</div><p class="meta" style="margin:6px 0 0">♡ назначено · <span style="color:var(--wine-hi, #e0475f)">♥</span> сыграно · 🌶 самая острая карта дня</p>`;
+
+  // выбранный день
+  const o = marks[sel] || { plan: [], played: [] };
+  h += `<div class="sec">${sel === today() ? 'Сегодня' : dayLabel(sel)}</div>`;
+  if (!o.plan.length && !o.played.length) h += `<div class="empty">В этот день ничего</div>`;
+  if (o.plan.length) h += `<ul class="list">${o.plan.map(x => { const c = byId(x.id); return `<li><span>♡</span>
+      <button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${TYPE[c.type].sym} ${esc(c.title)}<div class="meta">${x.plan ? 'в планах' : 'отложено'} · ${peppers(c.lvl)}</div></button>
+      <button class="x" data-act="moveLater" data-id="${c.id}">перенести</button><button class="x" data-act="unlater" data-id="${c.id}">убрать</button></li>`; }).join('')}</ul>`;
+  if (o.played.length) h += `<ul class="list">${o.played.map(e => { const c = byId(e.id); return `<li data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}"><span>♥</span>
+      <span class="grow">${TYPE[c.type].sym} ${esc(playedTitle(e, c))}</span><span class="meta">${NAME[e.L]} · ${hm(e.ts)} ›</span></li>`; }).join('')}</ul>`;
+
+  // без даты
+  const undated = state.later.filter(x => !x.day && byId(x.id));
+  if (undated.length) h += `<div class="sec">Отложено без даты</div><ul class="list">${undated.map(x => { const c = byId(x.id); return `<li><span>${TYPE[c.type].sym}</span>
+      <button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(c.title)}</button>
+      <button class="x" data-act="moveLater" data-id="${c.id}">назначить день</button><button class="x" data-act="unlater" data-id="${c.id}">убрать</button></li>`; }).join('')}</ul>`;
+  return h;
+}
+
 function settingsView() {
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Настройки</h1>`;
 
-  h += `<div class="set-sec"><h2>Арсенал</h2><p class="lead">Что у вас есть: ${allToys().filter(t => hasToy(t.id)).length} из ${allToys().length}. Карты с недостающими игрушками в «Сейчас» не выпадают — только «на следующий раз».</p>`;
-  const cats = [...new Set(allToys().map(t => t.cat || 'Свои'))];
-  h += cats.map(cat => `<div class="sec">${esc(cat)}</div><ul class="list">${allToys().filter(t => (t.cat || 'Свои') === cat).map(t => `<li>
-      <span class="grow">${esc(t.name)}${t.hint ? `<div class="meta">${esc(t.hint)}</div>` : ''}</span>
-      ${t.id.startsWith('my-') ? `<button class="x" data-act="delToy" data-id="${t.id}">убрать</button>` : ''}
-      <button class="toggle ${hasToy(t.id) ? 'on' : ''}" data-act="toy" data-id="${t.id}" aria-label="${esc(t.name)}"></button>
-    </li>`).join('')}</ul>`).join('');
-  h += `<div class="addrow"><input id="newToy" class="field" placeholder="Своя игрушка"><button class="btn small" data-act="addToy">Добавить</button></div></div>`;
+  h += customHtml();
 
-  h += `<div class="set-sec"><h2>Купить</h2><p class="lead">Сюда попадают покупки из карт «на следующий раз». Купили — игрушка уходит в арсенал.</p>`;
-  h += state.shop.length
-    ? `<ul class="list">${state.shop.map(id => `<li><span class="grow">${esc(toyName(id))}</span>
-        <button class="x" data-act="unshop" data-id="${id}">убрать</button>
-        <button class="btn small gold" data-act="bought" data-id="${id}">Купили</button></li>`).join('')}</ul>`
-    : `<div class="empty">Список пуст</div>`;
-  const notOwned = allToys().filter(t => !hasToy(t.id) && !state.shop.includes(t.id));
-  if (notOwned.length) h += `<div class="addrow"><select id="shopPick" class="field">${notOwned.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select><button class="btn small" data-act="addShop">В список</button></div>`;
-  h += `</div>`;
+  h += `<div class="set-sec"><h2>Стоп-слово</h2><p class="lead">Слово, которое останавливает игру сразу и без штрафов. Его увидите на паузе, в правилах и на острых картах.</p>
+    <div class="addrow"><input id="stopWord" class="field" placeholder="Например: красный" value="${esc(state.stopWord || '')}"><button class="btn small" data-act="setStopWord">Сохранить</button></div>
+  </div>`;
 
   h += `<div class="set-sec"><h2>Острота</h2><p class="lead">Карты выбранной остроты выпадают чаще, острее — не выпадают совсем. Штрафы — тоже по этой остроте.</p><div class="seg">
     ${[1, 2, 3].map(v => `<button class="${state.lvlMax === v ? 'on' : ''}" data-act="lvl" data-v="${v}">${peppers(v)}</button>`).join('')}
   </div></div>`;
 
-  const list = (title, lead, ids, act, label) => {
-    let s = `<div class="set-sec"><h2>${title}</h2><p class="lead">${lead}</p>`;
-    s += ids.length
+  h += fold('cal', 'Календарь', 'Назначенные и отложенные карты, а ниже — что уже сыграно. Нажмите на день; дату можно перенести.', calendarHtml(), true);
+
+  const list = (k, title, lead, ids, act, label) => fold(k, `${title} <span class="meta">${ids.length}</span>`, lead,
+    ids.length
       ? `<ul class="list">${ids.map(id => byId(id)).filter(Boolean).map(c => `<li>
           <span>${TYPE[c.type].sym}</span><button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(c.title)}</button>
           <button class="x" data-act="${act}" data-id="${c.id}">${label}</button></li>`).join('')}</ul>`
-      : `<div class="empty">Пусто</div>`;
-    return s + `</div>`;
-  };
-  h += unavailableHtml();
-  h += customHtml();
-  h += list('Избранное', 'Эти карты выпадают в три раза чаще.', Object.keys(state.fav), 'unfav', 'убрать');
-  h += list('Отложено и в планах', 'Предлагаются первыми в следующей игре. Убрать можно по одной или все сразу.', state.later.map(x => x.id), 'unlater', 'убрать');
-  if (state.later.length) h += `<div class="who-row"><button class="btn ghost small" data-act="clearLater">Очистить всё отложенное</button></div>`;
-  h += list('Никогда', 'Эти карты больше не выпадают. Можно вернуть, если передумали.', Object.keys(state.never), 'unnever', 'вернуть');
+      : `<div class="empty">Пусто</div>`, false);
+  h += list('fav', 'Избранное', 'Эти карты выпадают в три раза чаще.', Object.keys(state.fav), 'unfav', 'убрать');
+  h += list('never', 'Никогда', 'Эти карты больше не выпадают. Можно вернуть, если передумали.', Object.keys(state.never), 'unnever', 'вернуть');
 
-  h += `<div class="set-sec"><h2>Стоп-слово</h2><p class="lead">Слово, которое останавливает игру сразу и без штрафов. Его увидите на паузе, в правилах и на острых картах.</p>
-    <div class="addrow"><input id="stopWord" class="field" placeholder="Например: красный" value="${esc(state.stopWord || '')}"><button class="btn small" data-act="setStopWord">Сохранить</button></div>
-  </div>`;
+  // Арсенал: каждый раздел сворачивается
+  const cats = [...new Set(allToys().map(t => t.cat || 'Свои'))];
+  let ars = cats.map(cat => {
+    const toys = allToys().filter(t => (t.cat || 'Свои') === cat);
+    const k = 'ars-' + cat;
+    const open = ui.open && k in ui.open ? ui.open[k] : false;
+    return `<details class="unav" data-k="${esc(k)}" ${open ? 'open' : ''}><summary><span class="grow">${esc(cat)}</span><span class="meta">${toys.filter(t => hasToy(t.id)).length} из ${toys.length}</span></summary>
+      <ul class="list">${toys.map(t => `<li>
+      <span class="grow">${esc(t.name)}${t.hint ? `<div class="meta">${esc(t.hint)}</div>` : ''}</span>
+      ${t.id.startsWith('my-') ? `<button class="x" data-act="delToy" data-id="${t.id}">убрать</button>` : ''}
+      <button class="toggle ${hasToy(t.id) ? 'on' : ''}" data-act="toy" data-id="${t.id}" aria-label="${esc(t.name)}"></button>
+    </li>`).join('')}</ul></details>`;
+  }).join('');
+  ars += `<div class="addrow"><input id="newToy" class="field" placeholder="Своя игрушка"><button class="btn small" data-act="addToy">Добавить</button></div>`;
+  h += fold('arsenal', 'Арсенал', `Что у вас есть: ${allToys().filter(t => hasToy(t.id)).length} из ${allToys().length}. Карты с недостающими игрушками в «Сейчас» не выпадают — только «на следующий раз».`, ars, true);
+
+  let shop = state.shop.length
+    ? `<ul class="list">${state.shop.map(id => `<li><span class="grow">${esc(toyName(id))}</span>
+        <button class="x" data-act="unshop" data-id="${id}">убрать</button>
+        <button class="btn small gold" data-act="bought" data-id="${id}">Купили</button></li>`).join('')}</ul>`
+    : `<div class="empty">Список пуст</div>`;
+  const notOwned = allToys().filter(t => !hasToy(t.id) && !state.shop.includes(t.id));
+  if (notOwned.length) shop += `<div class="addrow"><select id="shopPick" class="field">${notOwned.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select><button class="btn small" data-act="addShop">В список</button></div>`;
+  h += fold('shop', `Купить <span class="meta">${state.shop.length}</span>`, 'Сюда попадают покупки из карт «на следующий раз». Купили — игрушка уходит в арсенал.', shop, true);
+
+  h += unavailableHtml();
 
   h += `<div class="set-sec"><h2>Код на вход</h2><p class="lead">Приложение будет спрашивать 4 цифры при каждом открытии.</p>
     ${state.pin
@@ -1355,10 +1444,10 @@ function settingsView() {
   </div>`;
 
   const n = t => CARDS.filter(c => c.type === t).length;
-  h += `<div class="set-sec"><h2>Игра</h2><p class="lead">В колоде: сценариев ${n('scenario')}, поз ${n('pose')}, действий ${n('action')}. Версия приложения: ${APP_VERSION}.</p>
+  h += `<div class="set-sec"><h2>Об игре</h2><p class="lead">Джуманджи, версия ${APP_VERSION}. В колоде ${CARDS.length} ${plural(CARDS.length, 'карта', 'карты', 'карт')}: сценариев ${n('scenario')}, поз ${n('pose')}, действий ${n('action')}${(state.customCards || []).length ? `, из них своих — ${state.customCards.length}` : ''}. Всё хранится только на этом телефоне.</p>
     <div class="btns" style="display:grid;gap:10px">
       <button class="btn" data-act="rules">Правила</button>
-      <button class="btn ghost" data-act="resetGame">Сбросить текущую игру</button>
+      <button class="btn ghost" data-act="resetGame">Стереть сессию</button>
     </div></div>`;
   return h;
 }
@@ -1600,11 +1689,18 @@ function modalView() {
         const n = (wd - base.getDay() + 7) % 7 || 7;
         if (n > 2) add(name, plus(n));
       }
-      body = `<h2>${m.mode === 'plan' ? 'Когда играем?' : 'Отложить на день'}</h2>
-      <p class="lead">${m.mode === 'plan' ? 'Карта ляжет в планы на выбранный день: в этот день её предложат первой, а покупки попадут в «Купить».' : 'В этот день карту предложат первой. До него она не будет мешаться.'}</p>
+      const head = { plan: 'Когда играем?', move: 'Перенести на день', later: 'Отложить на день' }[m.mode];
+      const text = {
+        plan: 'Карта ляжет в планы на выбранный день: в этот день её предложат первой, а покупки попадут в «Купить».',
+        move: `«${esc((byId(m.id) || {}).title || '')}» — на какой день?`,
+        later: 'В этот день карту предложат первой. До него она не будет мешаться.',
+      }[m.mode];
+      if (m.mode === 'move') opts.unshift({ label: 'Сегодня', day: today() });
+      body = `<h2>${head}</h2>
+      <p class="lead">${text}</p>
       <div class="links">${opts.map(o => `<button class="chip ${m.day === o.day ? 'buy' : ''}" data-act="scheduleDay" data-day="${o.day}">${o.label} · ${dayLabel(o.day)}</button>`).join('')}</div>
       <div class="sec">Или дата</div>
-      <input id="planDay" class="field" type="date" min="${isoDay(plus(1))}" value="${opts.some(o => o.day === m.day) ? '' : esc(m.day || '')}">
+      <input id="planDay" class="field" type="date" min="${m.mode === 'move' ? today() : isoDay(plus(1))}" value="${opts.some(o => o.day === m.day) ? '' : esc(m.day || '')}">
       <div class="btns"><button class="btn primary" data-act="scheduleGo">Назначить</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
       break;
     }
@@ -1712,8 +1808,8 @@ function modalView() {
       break;
 
     case 'resetGame':
-      body = `<h2>Сбросить игру?</h2><p class="lead">Снимется ведущий, штраф за «Никогда», идущий сценарий и счётчики. Журнал, избранное и арсенал останутся.</p>
-      <div class="btns"><button class="btn primary" data-act="resetGameYes">Сбросить</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
+      body = `<h2>Стереть сессию?</h2><p class="lead">Исчезнут текущая игра, ведущий, подарок ходов, невыполненное наказание и все отложенные и назначенные карты. Журнал сыгранного, избранное, арсенал, покупки и настройки останутся.</p>
+      <div class="btns"><button class="btn primary" data-act="resetGameYes">Стереть</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
       break;
   }
   // правила при первом входе и красную карточку не закрыть мимо кнопок
@@ -1764,6 +1860,11 @@ document.addEventListener('click', e => {
   if (!fn) return;
   if (fn(el.dataset) !== 'norender') render();
 });
+
+document.addEventListener('toggle', e => {
+  const k = e.target.dataset && e.target.dataset.k;
+  if (k) (ui.open || (ui.open = {}))[k] = e.target.open;
+}, true);
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && state.pin) { ui.locked = true; ui.pinEntry = ''; ui.peek = null; render(); }
