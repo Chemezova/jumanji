@@ -295,6 +295,13 @@ function waitPenalty() {
   window.scrollTo(0, 0);
 }
 
+// Пока карта в игре, ведущий не меняется — сначала «Сыграли» (или «Ход сделан»)
+function waitPlaying() {
+  toast('Сейчас идёт карта. Сначала «Сыграли» или «Ход сделан»');
+  ui.screen = 'playing';
+  window.scrollTo(0, 0);
+}
+
 function waitDecision() {
   toast('Сначала решите, что делать с вытянутой картой: «Играем», «Потом» или «Никогда»');
   ui.screen = 'card';
@@ -309,6 +316,8 @@ function resetTurn() {
 
 function endTurn() {
   resetTurn();
+  closePlaying();
+  state.scenario = null;
   if (state.forced) {
     state.forced.left--;
     if (state.forced.left > 0) { state.leader = state.forced.who; return; }
@@ -364,6 +373,8 @@ const actions = {
   pickLeader(d) {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
+    if (state.playing) return waitPlaying();
+    if (state.turnPlays) return toast('Ход ещё идёт. Закончите его кнопкой «Ход сделан»');
     if (state.forced) return toast(`Ход у ${state.forced.who === 'M' ? 'него' : 'неё'}: ${fixedWhy(state.forced)}`);
     state.leader = d.l; save();
   },
@@ -372,6 +383,8 @@ const actions = {
   spin() {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
+    if (state.playing) return waitPlaying();
+    if (state.turnPlays) return toast('Ход ещё идёт. Закончите его кнопкой «Ход сделан»');
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'spin', result: null };
   },
@@ -545,6 +558,7 @@ const actions = {
       return;
     }
     state.log.push({ ts: now(), id: p.id, L: p.leader, r: 'done', dur: passed });
+    if (state.scenario && state.scenario.id === p.id) state.scenario = null;   // сценарий сыгран — колода снова открыта
     state.playing = null; save();
     ui.modal = null; ui.screen = 'dash';
     releaseWake();
@@ -558,7 +572,7 @@ const actions = {
   stopEnd() {
     const p = state.playing;
     if (p) state.log.push({ ts: now(), id: p.id, L: p.leader, r: 'stop', dur: now() - p.start });
-    state.playing = null; state.game = null;
+    state.playing = null; state.game = null; state.scenario = null;
     save();
     ui.modal = null; ui.screen = 'dash';
     releaseWake();
@@ -710,6 +724,8 @@ const actions = {
   gift() {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
+    if (state.playing) return waitPlaying();
+    if (state.turnPlays) return toast('Ход ещё идёт. Закончите его кнопкой «Ход сделан»');
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'gift', n: 3 };
   },
@@ -810,7 +826,7 @@ function topBar() {
 function dashView() {
   const L = state.leader;
   const f = state.forced;
-  const player = l => `<button class="player ${l} ${L === l ? 'on' : ''}" data-act="pickLeader" data-l="${l}" ${f && f.who !== l ? 'disabled' : ''} ${state.drawn ? 'data-why="1"' : ''}>
+  const player = l => `<button class="player ${l} ${L === l ? 'on' : ''}" data-act="pickLeader" data-l="${l}" ${f && f.who !== l ? 'disabled' : ''} ${state.drawn || state.playing || state.penaltyDue || state.turnPlays ? 'data-why="1"' : ''}>
       <div class="nm">${NAME[l]}</div>
       <div class="st">${L === l ? 'ведёт' : 'подчиняется'}</div>
     </button>`;
@@ -818,7 +834,7 @@ function dashView() {
   let h = topBar();
   h += `<div class="players">${player('M')}${player('F')}</div>`;
   h += `<div class="who-row">
-      <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''} ${state.drawn ? 'data-why="1"' : ''}>➶ Кто сегодня главный?</button>
+      <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''} ${state.drawn || state.playing || state.penaltyDue || state.turnPlays ? 'data-why="1"' : ''}>➶ Кто сегодня главный?</button>
     </div>`;
   h += `<div class="seg">
       <button class="${state.pickMode === 'random' ? 'on' : ''}" data-act="pickMode" data-m="random">Стрелка</button>
