@@ -63,6 +63,7 @@ a { color: var(--gold); }
 .player.on::after {
   content: "♛"; position: absolute; top: 8px; right: 12px; color: var(--gold); font-size: 16px;
 }
+.gift-badge { position: absolute; top: 8px; left: 10px; font-size: 12px; color: var(--gold); }
 .player[disabled] { opacity: .45; }
 
 .who-row { display: flex; gap: 10px; margin-top: 12px; }
