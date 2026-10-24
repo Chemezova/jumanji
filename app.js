@@ -1076,9 +1076,10 @@ function deckView() {
   if (ui.jokerPick) return jokerDeckView();
   const t = ui.deckType || 'scenario';
   const lead = ui.deckLead || 'M';
-  // карты с пометкой top — первыми в списке
-  const list = CARDS.filter(c => c.type === t && (!c.leaders || c.leaders.includes(lead)))
-    .sort((a, b) => (b.top ? 1 : 0) - (a.top ? 1 : 0));
+  // карты с пометкой pos встают на своё место в списке (pos: 8 — восьмая строка)
+  const all = CARDS.filter(c => c.type === t && (!c.leaders || c.leaders.includes(lead)));
+  const list = all.filter(c => !c.pos);
+  all.filter(c => c.pos).sort((a, b) => a.pos - b.pos).forEach(c => list.splice(Math.min(c.pos - 1, list.length), 0, c));
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Колода</h1>
     <p class="lead" style="color:var(--muted);margin:0">Всего карт: ${CARDS.length}. Нажмите на карту, чтобы открыть её целиком.</p>
     <div class="seg">${Object.keys(TYPE).map(k => `<button class="${t === k ? 'on' : ''}" data-act="deckType" data-t="${k}">${TYPE[k].many} · ${CARDS.filter(c => c.type === k).length}</button>`).join('')}</div>
