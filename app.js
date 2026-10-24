@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 47;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 48;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -11,7 +11,19 @@ const HE_CHANCE = 0.5;             // доля «ОН» в стрелке
 const FAV_WEIGHT = 3;
 const JOKER_WEIGHT = 3;            // джокер выпадает чаще обычной карты
 const RARE_WEIGHT = 0.1;
-const SPICE_WEIGHT = 2.5;          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
+const SPICE_WEIGHT = 2.5;
+const AUTHOR_WEIGHT = 2;           // карты, придуманные и расписанные Еленой, — чаще обычных
+const AUTHOR_IDS = new Set([
+  'sc-escort', 'sc-scientist', 'sc-commander', 'sc-porn-scene', 'sc-photoshoot', 'sc-masquerade',
+  'sc-no-hands-massage', 'sc-dirty', 'sc-pet', 'bs-inspection',
+  'ac-read-erotica', 'ac-wide-touch', 'ac-inner-training', 'ac-golden', 'ac-yoni', 'ac-gag',
+  'bo-hands', 'bo-legs', 'bo-frog', 'bo-wrists-ankles', 'bd-positions',
+  'tp-cat', 'tp-doll', 'tp-ready', 'tp-collar',
+  'bd-sheer', 'bd-torn-tights', 'bd-mini', 'bd-coat', 'bd-heels', 'bd-his-outfit', 'bd-choose-tool', 'bd-buy-whip',
+  'bd-deep-throat', 'bd-titfuck', 'bd-facesit', 'bd-lower', 'bd-plug', 'bd-thighs', 'bd-soles', 'bd-front-flog', 'bd-palms',
+  'sw-spank', 'sw-kneel', 'sw-tied', 'sw-denial', 'sw-outfit', 'bs-reversal',
+  'buy-shackles', 'buy-douche', 'buy-bdsm-kit', 'buy-any',
+]);          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
 const LATER_PER_TURN = 5;          // пятое «потом» за ход — красная карточка и ход партнёру
 const LATER_TO_NEVER = 10;         // столько раз отложили — карта уходит в «Никогда»
@@ -268,6 +280,7 @@ function cardWeight(c) {
   if (st.p) w *= 1 + Math.min(st.p, 5) * 0.2;
   if (st.l) w *= Math.pow(0.8, st.l);
   if (c.rare && state.when === 'now') w *= RARE_WEIGHT;
+  if (AUTHOR_IDS.has(c.id)) w *= AUTHOR_WEIGHT;
   // выбранная острота выпадает чаще, сильно мягче неё — реже
   const gap = state.lvlMax - (c.lvl || 1);
   if (gap === 0) w *= SPICE_WEIGHT;
@@ -317,8 +330,20 @@ function pickRandom(type) {
   return pool[pool.length - 1];
 }
 
+// Дата в виде «2026-10-31» — по местному времени телефона
+function isoDay(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+function today() { return isoDay(new Date()); }
+function dayLabel(iso) {
+  if (!iso) return 'без даты';
+  const d = new Date(iso + 'T12:00');
+  if (iso === today()) return 'сегодня';
+  return d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+// отложенная карта «созрела»: её день настал или день не назначен
+const due = x => !x.day || x.day <= today();
+
 function pendingFor(type) {
-  return state.later.filter(x => {
+  return state.later.filter(x => due(x)).filter(x => {
     const c = byId(x.id);
     return c && c.type === type && !state.never[c.id] && (!c.leaders || c.leaders.includes(state.leader))
       && (c.when !== 'next' || x.plan) && !missingNeeds(c).length
@@ -474,6 +499,13 @@ const actions = {
     setTimeout(() => { ui.screen = 'card'; state.drawn = { id: card.id, from: 'deck' }; save(); render(); window.scrollTo(0, 0); }, 1400);
     return 'norender';
   },
+  openPlanned(d) {
+    if (state.penaltyDue) return waitPenalty();
+    if (state.drawn) return waitDecision();
+    if (!state.leader) return toast('Сначала выберите ведущего');
+    state.drawn = { id: d.id, from: 'later' }; save();
+    ui.screen = 'card'; window.scrollTo(0, 0);
+  },
   pendingYes() {
     const id = ui.modal.id;
     ui.modal = null;
@@ -489,21 +521,26 @@ const actions = {
   },
 
   // решение по карте
-  play() {
+  plan(d) {
     const card = byId(state.drawn.id);
     removeLater(card.id);
-    if (state.when === 'next') {
-      state.later.push({ id: card.id, ts: now(), plan: true });
-      const needs = missingNeeds(card).map(n => n.split('|')[0]);
-      const toBuy = needs.concat((card.buy || []).filter(id => !hasToy(id)));
-      toBuy.forEach(id => { if (!state.shop.includes(id)) state.shop.push(id); });
-      log(card.id, 'plan', Object.assign({ L: topFor(card, state.leader) }, jokerWish()));
-      markPlayed(card);
-      state.turnPlays++; save();
-      ui.screen = 'dash'; state.drawn = null; save();
-      toast(toBuy.length ? 'В планах. Покупки — в списке «Купить»' : 'Запланировано на следующий раз');
+    state.later.push({ id: card.id, ts: now(), plan: true, day: d.day });
+    const needs = missingNeeds(card).map(n => n.split('|')[0]);
+    const toBuy = needs.concat((card.buy || []).filter(id => !hasToy(id)));
+    toBuy.forEach(id => { if (!state.shop.includes(id)) state.shop.push(id); });
+    log(card.id, 'plan', Object.assign({ L: topFor(card, state.leader) }, jokerWish()));
+    markPlayed(card);
+    state.turnPlays++;
+    ui.screen = 'dash'; state.drawn = null; save();
+    toast(`Назначено на ${dayLabel(d.day)}` + (toBuy.length ? '. Покупки — в списке «Купить»' : ''));
+  },
+  play() {
+    const card = byId(state.drawn.id);
+    if (state.when === 'next') {   // на следующий раз — сначала выбрать день, дальше plan()
+      ui.modal = { type: 'schedule', mode: 'plan', day: '' };
       return;
     }
+    removeLater(card.id);
     ensureGame();
     const top = topFor(card, state.leader);
     if (card.type === 'scenario') state.scenario = { id: card.id, leader: top, start: now() };
@@ -518,11 +555,21 @@ const actions = {
     window.scrollTo(0, 0);
     wakeLock();
   },
-  later() {
+  // «Отложить» и «Играем» в режиме «на следующий раз» — сначала назначить день
+  schedule(d) { ui.modal = { type: 'schedule', mode: d.mode || 'later', day: '' }; },
+  scheduleDay(d) { ui.modal.day = d.day; },
+  scheduleGo() {
+    const day = ui.modal.day || ($('#planDay') && $('#planDay').value);
+    if (!day) return toast('Выберите день');
+    const mode = ui.modal.mode;
+    ui.modal = null;
+    return mode === 'plan' ? actions.plan({ day }) : actions.later({ day });
+  },
+  later(d) {
     const card = byId(state.drawn.id);
     const wasPlan = state.later.find(x => x.id === card.id)?.plan;
     removeLater(card.id);
-    state.later.push({ id: card.id, ts: now(), plan: wasPlan || state.when === 'next' });
+    state.later.push({ id: card.id, ts: now(), plan: wasPlan || state.when === 'next', day: d && d.day });
     log(card.id, 'later');
     const st = stat(card.id);
     if (!card.joker) st.l++;   // джокер «Потом» не понижает и в «Никогда» сам не уходит
@@ -532,7 +579,7 @@ const actions = {
       state.never[card.id] = true;
       removeLater(card.id);
       toast(`Карту откладывали ${LATER_TO_NEVER} раз — она ушла в «Никогда». Вернуть можно в Настройках`);
-    } else toast(inGift() ? 'Отложено. В подарок «Потом» без ограничений' : `Отложено. «Потом» в этом ходе: ${state.turnLater} из ${LATER_PER_TURN}`);
+    } else toast(`Отложено на ${dayLabel(d && d.day)}` + (inGift() ? '' : ` · в этом ходе ${state.turnLater} из ${LATER_PER_TURN}`));
     if (state.turnLater >= LATER_PER_TURN) passTurn(state.leader, `${LATER_PER_TURN} раз «Давай потом» за ход`);
     save();
   },
@@ -949,6 +996,10 @@ function dashView() {
       <button class="${state.when === 'next' ? 'on' : ''}" data-act="when" data-w="next">На следующий раз</button>
     </div>`;
 
+  // Что назначено на сегодня (или просрочено) — отдельной строкой наверху
+  const todays = state.later.filter(x => x.day && x.day <= today() && byId(x.id));
+  if (todays.length) h += `<div class="note gift">📅 По плану на сегодня: ${todays.map(x => `<button class="textlink" style="padding:0" data-act="openPlanned" data-id="${x.id}">${esc(cardFor(byId(x.id), L || 'M').title)}</button>`).join(', ')}</div>`;
+
   // Невыполненное наказание держит игру
   if (state.penaltyDue) {
     const p = state.penaltyDue;
@@ -1009,9 +1060,9 @@ function dashView() {
   if (state.later.length) {
     h += `<div class="zone-title" style="margin:20px 0 8px"><span class="sec" style="margin:0">Отложено и в планах</span>
       <button class="textlink" style="padding:0" data-act="clearLater">очистить</button></div><div class="links">`;
-    h += state.later.map(x => {
+    h += state.later.slice().sort((a, b) => (a.day || '').localeCompare(b.day || '')).map(x => {
       const c = byId(x.id);
-      return c ? `<button class="chip ${x.plan ? 'buy' : ''}" data-act="view" data-id="${c.id}">${TYPE[c.type].sym} ${esc(cardFor(c, L).title)}</button>` : '';
+      return c ? `<button class="chip ${x.plan ? 'buy' : ''}" data-act="view" data-id="${c.id}">${TYPE[c.type].sym} ${esc(cardFor(c, L).title)} · ${dayLabel(x.day)}</button>` : '';
     }).join('');
     h += `</div>`;
   }
@@ -1141,13 +1192,12 @@ function cardScreen() {
     <button class="btn" style="grid-column:1/-1" data-act="refuseSwitch">Отказываюсь — красная карточка</button>
   </div>`
     : `<div class="card-actions">
-    <button class="btn primary" data-act="play">Играем</button>
-    <button class="btn" data-act="later">Давай потом</button>
+    <button class="btn primary" data-act="play">${state.when === 'next' ? 'Играем — назначить день' : 'Играем'}</button>
+    <button class="btn" data-act="schedule" data-mode="later">Отложить на день…</button>
     ${card.joker ? '' : '<button class="btn" data-act="never">Никогда</button>'}
   </div>`;
   h += `<div class="card-tools">
     <button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
-    ${state.turnPlays ? '' : '<button class="textlink" data-act="skip">Пропустить ход</button>'}
   </div>`;
   return h;
 }
@@ -1516,6 +1566,26 @@ function modalView() {
         ? `<button class="btn primary" data-act="closeModal">Начинаем</button>`
         : `<button class="btn primary" data-act="spinGo">Крутить</button><button class="btn ghost" data-act="closeModal">Отмена</button>`}</div>`;
       break;
+
+    case 'schedule': {
+      const base = new Date();
+      const opts = [];
+      const add = (label, d) => opts.push({ label, day: isoDay(d) });
+      const plus = n => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
+      add('Завтра', plus(1));
+      add('Послезавтра', plus(2));
+      for (const [wd, name] of [[5, 'В пятницу'], [6, 'В субботу'], [0, 'В воскресенье']]) {
+        const n = (wd - base.getDay() + 7) % 7 || 7;
+        if (n > 2) add(name, plus(n));
+      }
+      body = `<h2>${m.mode === 'plan' ? 'Когда играем?' : 'Отложить на день'}</h2>
+      <p class="lead">${m.mode === 'plan' ? 'Карта ляжет в планы на выбранный день: в этот день её предложат первой, а покупки попадут в «Купить».' : 'В этот день карту предложат первой. До него она не будет мешаться.'}</p>
+      <div class="links">${opts.map(o => `<button class="chip ${m.day === o.day ? 'buy' : ''}" data-act="scheduleDay" data-day="${o.day}">${o.label} · ${dayLabel(o.day)}</button>`).join('')}</div>
+      <div class="sec">Или дата</div>
+      <input id="planDay" class="field" type="date" min="${isoDay(plus(1))}" value="${opts.some(o => o.day === m.day) ? '' : esc(m.day || '')}">
+      <div class="btns"><button class="btn primary" data-act="scheduleGo">Назначить</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
+      break;
+    }
 
     case 'pending': {
       const c = byId(m.id);
