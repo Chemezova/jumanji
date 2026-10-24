@@ -18,6 +18,16 @@ const NEW_TOY_WEIGHT = 12;         // только что купленная и�
 let TOYS = [], PENALTIES = [], CARDS = [];
 
 const NAME = { M: 'ОН', F: 'ОНА' };
+
+// Карта наказаний: колесо в красной карточке. Шесть зон, у каждой — своё орудие и сила
+const BODY_MAP = [
+  { zone: 'Ягодицы', short: 'Попа', how: '5 ударов шлёпалкой, ремнём или ладонью — в полную силу. Считать вслух.' },
+  { zone: 'Бёдра снаружи', short: 'Бёдра', how: '5 ударов ладонью или шлёпалкой по внешней стороне бёдер. Ноги не сводить.' },
+  { zone: 'Бёдра изнутри', short: 'Изнутри', how: '5 лёгких шлепков пальцами по внутренней стороне бёдер. Ближе к паху — ещё легче.' },
+  { zone: 'Ступни', short: 'Ступни', how: 'Лечь на живот, ступни вверх. 5 лёгких хлёстких ударов стеком или линейкой по подушечкам ступней.' },
+  { zone: 'Ладони', short: 'Ладони', how: 'Ладони вперёд. 5 ударов линейкой или стеком по середине ладони. Убрал руку — удар заново.' },
+  { zone: 'Соски', short: 'Соски', how: '5 касаний хвостами флоггера или пальцами — едва-едва. Это про остроту, а не про силу.' },
+];
 const TYPE = {
   scenario: { one: 'Сценарий', many: 'Сценарии', sym: '✦', desc: 'Один на 3 часа' },
   pose: { one: 'Поза', many: 'Позы', sym: '❦', desc: 'Одна за ход' },
@@ -549,6 +559,32 @@ const actions = {
     ui.modal = { type: 'penaltyShow', who: m.who, title: 'Прихоть', text };
   },
   forgive() { ui.modal = null; },
+  bodyMap() { const m = ui.modal; ui.modal = { type: 'bodyMap', who: m.who, by: m.by, reason: m.reason, spins: [], angle: 0 }; },
+  punishBack() { const m = ui.modal; ui.modal = { type: 'punish', who: m.who, by: m.by, reason: m.reason }; },
+  bodySpin() {
+    const m = ui.modal;
+    if (m.spinning) return 'norender';
+    const i = Math.floor(Math.random() * BODY_MAP.length);
+    const step = 360 / BODY_MAP.length;
+    const target = i * step + 8 + Math.random() * (step - 16);
+    const start = m.angle || 0;
+    const angle = start - (start % 360) + 360 * 5 + target;
+    m.spinning = true;
+    const needle = $('.needle');
+    needle.style.transition = '';
+    needle.getBoundingClientRect();
+    needle.style.transform = `rotate(${angle}deg)`;
+    document.querySelectorAll('.sheet .btns .btn').forEach(b => { b.disabled = true; });
+    setTimeout(() => {
+      m.spinning = false;
+      m.angle = angle;
+      m.spins.push(i);
+      state.log.push({ ts: now(), id: null, L: m.who, r: 'punish', note: `Карта наказаний: ${BODY_MAP[i].zone} — ${m.reason}` });
+      save();
+      render();
+    }, 3700);
+    return 'norender';
+  },
   closeModal() { ui.modal = null; },
 
   // сценарий на дашборде
@@ -1040,7 +1076,9 @@ function deckView() {
   if (ui.jokerPick) return jokerDeckView();
   const t = ui.deckType || 'scenario';
   const lead = ui.deckLead || 'M';
-  const list = CARDS.filter(c => c.type === t && (!c.leaders || c.leaders.includes(lead)));
+  // карты с пометкой top — первыми в списке
+  const list = CARDS.filter(c => c.type === t && (!c.leaders || c.leaders.includes(lead)))
+    .sort((a, b) => (b.top ? 1 : 0) - (a.top ? 1 : 0));
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Колода</h1>
     <p class="lead" style="color:var(--muted);margin:0">Всего карт: ${CARDS.length}. Нажмите на карту, чтобы открыть её целиком.</p>
     <div class="seg">${Object.keys(TYPE).map(k => `<button class="${t === k ? 'on' : ''}" data-act="deckType" data-t="${k}">${TYPE[k].many} · ${CARDS.filter(c => c.type === k).length}</button>`).join('')}</div>
@@ -1139,6 +1177,27 @@ function wheelSvg() {
   </svg>`;
 }
 
+function bodyWheelSvg() {
+  const cx = 130, cy = 130, r = 118, n = BODY_MAP.length, step = 360 / n;
+  const pt = (a, k = 1) => [cx + r * k * Math.sin(a * Math.PI / 180), cy - r * k * Math.cos(a * Math.PI / 180)];
+  const fills = ['#4f2636', '#3a1f33', '#4f2636', '#3a1f33', '#4f2636', '#3a1f33'];
+  const sectors = BODY_MAP.map((z, i) => {
+    const a = i * step, b = a + step;
+    const [x1, y1] = pt(a), [x2, y2] = pt(b), [lx, ly] = pt(a + step / 2, 0.66);
+    return `<path d="M${cx} ${cy} L${x1} ${y1} A${r} ${r} 0 0 1 ${x2} ${y2} Z" fill="${fills[i]}" stroke="#0d0a0c" stroke-width="3"/>
+      <text x="${lx}" y="${ly + 5}" text-anchor="middle" font-family="Georgia, serif" font-size="15" fill="#ede4e0">${z.short}</text>`;
+  }).join('');
+  const rot = ui.modal.angle || 0;
+  return `<svg viewBox="0 0 260 260">
+    ${sectors}
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#c9a46c" stroke-width="1.5"/>
+    <g class="needle" style="transform: rotate(${rot}deg); transition: none">
+      <path d="M${cx} ${cy - 96} L${cx + 9} ${cy} L${cx - 9} ${cy} Z" fill="#c9a46c"/>
+      <circle cx="${cx}" cy="${cy}" r="12" fill="#c9a46c"/><circle cx="${cx}" cy="${cy}" r="5" fill="#0d0a0c"/>
+    </g>
+  </svg>`;
+}
+
 function modalView() {
   const m = ui.modal;
   if (!m) return '';
@@ -1197,9 +1256,24 @@ function modalView() {
       <p class="lead" style="text-align:center">${NAME[judge]} решает, как наказать ${m.who === 'M' ? 'его' : 'её'} за ${esc(m.reason)}.</p>
       ${PENALTIES.map((p, i) => `<button class="pen" data-act="penalty" data-i="${i}"><b>${esc(p.title)}</b><span>${esc(p.text)}</span></button>`).join('')}
       <button class="pen" data-act="penalty" data-i="rand"><b>Случайное наказание</b><span>Пусть решит колода</span></button>
+      <button class="pen" data-act="bodyMap"><b>🎯 Карта наказаний</b><span>Колесо выбирает место на теле — ягодицы, бёдра, ступни, ладони или соски</span></button>
       <div class="sec">Своя прихоть</div>
       <div class="addrow"><input id="ownPenalty" class="field" placeholder="Например: весь вечер без белья"><button class="btn small" data-act="penaltyOwn">Назначить</button></div>
       <div class="btns"><button class="btn ghost" data-act="forgive">Простить</button></div>`;
+      break;
+    }
+
+    case 'bodyMap': {
+      const last = m.spins.length ? BODY_MAP[m.spins[m.spins.length - 1]] : null;
+      const twice = last && m.spins.filter(i => i === m.spins[m.spins.length - 1]).length > 1;
+      body = `<div class="redcard"></div><h2 style="text-align:center">Карта наказаний</h2>
+      <p class="lead" style="text-align:center">Для: ${NAME[m.who]}. Колесо выбирает место, ${NAME[m.by || other(m.who)]} — силу.</p>
+      <div class="wheel-wrap">${bodyWheelSvg()}</div>
+      ${last ? `<div class="box order" style="text-align:center"><b>${esc(last.zone)}${twice ? ' — повтор, удвоить' : ''}</b>${esc(last.how)}</div>` : ''}
+      <div class="btns">
+        <button class="btn primary" data-act="bodySpin">${last ? 'Крутить ещё' : 'Крутить'}</button>
+        ${last ? '<button class="btn ghost" data-act="closeModal">Принято</button>' : '<button class="btn ghost" data-act="punishBack">Назад</button>'}
+      </div>`;
       break;
     }
 
@@ -1247,7 +1321,7 @@ function modalView() {
       break;
   }
   // правила при первом входе и красную карточку не закрыть мимо кнопок
-  const sticky = (m.type === 'rules' && m.first) || m.type === 'punish' || m.spinning;
+  const sticky = (m.type === 'rules' && m.first) || m.type === 'punish' || m.type === 'bodyMap' || m.spinning;
   return `<div class="overlay" ${sticky ? '' : 'data-act="closeModal" data-self="1"'}><div class="sheet">${body}</div></div>`;
 }
 
