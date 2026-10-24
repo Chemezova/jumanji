@@ -571,9 +571,15 @@ const actions = {
   forgive() { ui.modal = null; },
   bodyMap() { const m = ui.modal; ui.modal = { type: 'bodyMap', who: m.who, by: m.by, reason: m.reason, spins: [], angle: 0 }; },
   punishBack() { const m = ui.modal; ui.modal = { type: 'punish', who: m.who, by: m.by, reason: m.reason }; },
+  // отменить наказание с колеса: запись из журнала убирается
+  bodyCancel() {
+    const e = state.log[state.log.length - 1];
+    if (e && e.r === 'punish' && (e.note || '').startsWith('Карта наказаний')) state.log.pop();
+    save(); ui.modal = null; toast('Наказание отменено');
+  },
   bodySpin() {
     const m = ui.modal;
-    if (m.spinning) return 'norender';
+    if (m.spinning || m.spins.length) return 'norender';   // колесо крутится один раз
     const i = Math.floor(Math.random() * BODY_MAP.length);
     const step = 360 / BODY_MAP.length;
     const target = i * step + 8 + Math.random() * (step - 16);
@@ -1287,15 +1293,16 @@ function modalView() {
     }
 
     case 'bodyMap': {
-      const last = m.spins.length ? BODY_MAP[m.spins[m.spins.length - 1]] : null;
-      const twice = last && m.spins.filter(i => i === m.spins[m.spins.length - 1]).length > 1;
+      const last = m.spins.length ? BODY_MAP[m.spins[0]] : null;
       body = `<div class="redcard"></div><h2 style="text-align:center">Карта наказаний</h2>
       <p class="lead" style="text-align:center">Для: ${NAME[m.who]}. Колесо выбирает место, ${NAME[m.by || other(m.who)]} — силу.</p>
       <div class="wheel-wrap">${bodyWheelSvg()}</div>
-      ${last ? `<div class="box order" style="text-align:center"><b>${esc(last.zone)}${twice ? ' — повтор, удвоить' : ''}</b>${esc(last.how)}</div>` : ''}
-      <div class="btns">
-        <button class="btn primary" data-act="bodySpin">${last ? 'Крутить ещё' : 'Крутить'}</button>
-        ${last ? '<button class="btn ghost" data-act="closeModal">Принято</button>' : '<button class="btn ghost" data-act="punishBack">Назад</button>'}
+      ${last ? `<div class="box order" style="text-align:center"><b>${esc(last.zone)}</b>${esc(last.how)}</div>` : ''}
+      <div class="btns">${last
+        ? `<button class="btn primary" data-act="closeModal">Принято</button>
+        <button class="btn ghost" data-act="bodyCancel">Отменить наказание</button>`
+        : `<button class="btn primary" data-act="bodySpin">Крутить</button>
+        <button class="btn ghost" data-act="punishBack">Назад</button>`}
       </div>`;
       break;
     }
