@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 45;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 46;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -10,14 +10,15 @@ const FORCED_TURNS = 3;            // после «Никогда» ход у п
 const HE_CHANCE = 0.5;             // доля «ОН» в стрелке
 const FAV_WEIGHT = 3;
 const JOKER_WEIGHT = 3;            // джокер выпадает чаще обычной карты
-const RARE_WEIGHT = 0.1;           // «слишком игровые» сценарии в режиме «Сейчас»
+const RARE_WEIGHT = 0.1;
+const SPICE_WEIGHT = 2.5;          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
 const LATER_PER_TURN = 5;          // пятое «потом» за ход — красная карточка и ход партнёру
 const LATER_TO_NEVER = 10;         // столько раз отложили — карта уходит в «Никогда»
 const NEW_TOY_WEIGHT = 12;         // только что купленная игрушка выпадает почти сразу
 
 // Колода приходит зашифрованной (deck.js) и заполняется после ввода пароля
-let TOYS = [], PENALTIES = [], CARDS = [];
+let TOYS = [], PENALTIES = [], CARDS = [], FORGIVE = {};
 
 const NAME = { M: 'ОН', F: 'ОНА' };
 
@@ -267,6 +268,10 @@ function cardWeight(c) {
   if (st.p) w *= 1 + Math.min(st.p, 5) * 0.2;
   if (st.l) w *= Math.pow(0.8, st.l);
   if (c.rare && state.when === 'now') w *= RARE_WEIGHT;
+  // выбранная острота выпадает чаще, сильно мягче неё — реже
+  const gap = state.lvlMax - (c.lvl || 1);
+  if (gap === 0) w *= SPICE_WEIGHT;
+  else if (gap >= 2) w *= 0.5;
   if (state.newToy && usesToy(c, state.newToy)) w *= NEW_TOY_WEIGHT;   // новинка — первой
   return w;
 }
@@ -623,7 +628,8 @@ const actions = {
   // штрафы
   penalty(d) {
     const m = ui.modal;
-    const i = d.i === 'rand' ? Math.floor(Math.random() * PENALTIES.length) : +d.i;
+    const allowed = PENALTIES.map((p, i) => i).filter(i => (PENALTIES[i].lvl || 1) <= state.lvlMax);
+    const i = d.i === 'rand' ? allowed[Math.floor(Math.random() * allowed.length)] : +d.i;
     const p = PENALTIES[i];
     state.log.push({ ts: now(), id: null, L: m.who, r: 'punish', note: `${p.title} — ${m.reason}` });
     state.penaltyDue = { who: m.who, title: p.title, text: p.text, ts: now() };
@@ -639,7 +645,24 @@ const actions = {
     save();
     ui.modal = { type: 'penaltyShow', who: m.who, title: 'Прихоть', text };
   },
-  forgive() { ui.modal = null; },
+  // «Простить» — не бесплатно: оценить проступок от 1 до 5 и выбрать цену прощения
+  forgive() { const m = ui.modal; ui.modal = { type: 'forgive', who: m.who, by: m.by, reason: m.reason, deg: 0, picks: [] }; },
+  forgiveDeg(d) {
+    const m = ui.modal;
+    m.deg = +d.deg;
+    const pool = (FORGIVE[m.deg] || []).slice();
+    m.picks = [];
+    while (pool.length && m.picks.length < 3) m.picks.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  },
+  forgiveMore() { return actions.forgiveDeg({ deg: ui.modal.deg }); },
+  forgivePick(d) {
+    const m = ui.modal;
+    const text = m.picks[+d.i];
+    state.log.push({ ts: now(), id: null, L: m.who, r: 'punish', note: `Прощение: ${text} — ${m.reason}` });
+    state.penaltyDue = { who: m.who, title: 'Цена прощения', text, ts: now() };
+    save(); ui.modal = null;
+  },
+  forgiveFree() { ui.modal = null; toast('Прощено без условий'); },
   bodyMap() { const m = ui.modal; ui.modal = { type: 'bodyMap', who: m.who, by: m.by, reason: m.reason, spins: [], angle: 0 }; },
   punishBack() { const m = ui.modal; ui.modal = { type: 'punish', who: m.who, by: m.by, reason: m.reason }; },
   // отменить наказание с колеса: запись из журнала убирается
@@ -995,7 +1018,7 @@ function dashView() {
 
   // Сыграно в этой игре
   if (state.game) {
-    const played = state.log.filter(e => e.ts >= state.game.start && e.r === 'play');
+    const played = state.log.filter(e => e.ts >= state.game.start && e.r === 'play' && byId(e.id));
     h += `<div class="sec">В этой игре</div>`;
     h += played.length
       ? `<ul class="list">${played.map(e => {
@@ -1223,7 +1246,7 @@ function settingsView() {
   if (notOwned.length) h += `<div class="addrow"><select id="shopPick" class="field">${notOwned.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select><button class="btn small" data-act="addShop">В список</button></div>`;
   h += `</div>`;
 
-  h += `<div class="set-sec"><h2>Острота</h2><p class="lead">Карты острее выбранной не выпадают.</p><div class="seg">
+  h += `<div class="set-sec"><h2>Острота</h2><p class="lead">Карты выбранной остроты выпадают чаще, острее — не выпадают совсем. Штрафы — тоже по этой остроте.</p><div class="seg">
     ${[1, 2, 3].map(v => `<button class="${state.lvlMax === v ? 'on' : ''}" data-act="lvl" data-v="${v}">${peppers(v)}</button>`).join('')}
   </div></div>`;
 
@@ -1510,12 +1533,12 @@ function modalView() {
       const judge = m.by || other(m.who);
       body = `<div class="redcard"></div><h2 style="text-align:center">Красная карточка</h2>
       <p class="lead" style="text-align:center">${NAME[judge]} решает, как наказать ${m.who === 'M' ? 'его' : 'её'} за ${esc(m.reason)}.</p>
-      ${PENALTIES.map((p, i) => `<button class="pen" data-act="penalty" data-i="${i}"><b>${esc(p.title)}</b><span>${esc(p.text)}</span></button>`).join('')}
+      ${PENALTIES.map((p, i) => (p.lvl || 1) > state.lvlMax ? '' : `<button class="pen" data-act="penalty" data-i="${i}"><b>${esc(p.title)}</b><span>${esc(p.text)}</span></button>`).join('')}
       <button class="pen" data-act="penalty" data-i="rand"><b>Случайное наказание</b><span>Пусть решит колода</span></button>
       <button class="pen" data-act="bodyMap"><b>🎯 Карта наказаний</b><span>Колесо выбирает место на теле — ягодицы, бёдра, ступни, ладони или соски</span></button>
       <div class="sec">Своя прихоть</div>
       <div class="addrow"><input id="ownPenalty" class="field" placeholder="Например: весь вечер без белья"><button class="btn small" data-act="penaltyOwn">Назначить</button></div>
-      <div class="btns"><button class="btn ghost" data-act="forgive">Простить</button></div>`;
+      <div class="btns"><button class="btn ghost" data-act="forgive">Простить…</button></div>`;
       break;
     }
 
@@ -1531,6 +1554,18 @@ function modalView() {
         : `<button class="btn primary" data-act="bodySpin">Крутить</button>
         <button class="btn ghost" data-act="punishBack">Назад</button>`}
       </div>`;
+      break;
+    }
+
+    case 'forgive': {
+      const degs = { 1: 'пустяк', 2: 'мелочь', 3: 'заметно', 4: 'серьёзно', 5: 'очень серьёзно' };
+      body = `<h2 style="text-align:center">Простить?</h2>
+      <p class="lead" style="text-align:center">${NAME[m.by || other(m.who)]}, насколько серьёзен проступок? Чем серьёзнее, тем дороже прощение.</p>
+      <div class="seg">${[1, 2, 3, 4, 5].map(n => `<button class="${m.deg === n ? 'on' : ''}" data-act="forgiveDeg" data-deg="${n}">${n}</button>`).join('')}</div>
+      ${m.deg ? `<p class="lead" style="text-align:center;margin:10px 0 6px">${degs[m.deg]} — цена на выбор:</p>
+        ${m.picks.map((t, i) => `<button class="pen" data-act="forgivePick" data-i="${i}"><span style="color:var(--text);font-size:15px;margin:0">${esc(t)}</span></button>`).join('')}
+        <button class="textlink" data-act="forgiveMore">Другие варианты</button>` : ''}
+      <div class="btns"><button class="btn ghost" data-act="forgiveFree">Простить даром</button><button class="btn ghost" data-act="punishBack">Назад к наказаниям</button></div>`;
       break;
     }
 
@@ -1584,7 +1619,7 @@ function modalView() {
       break;
   }
   // правила при первом входе и красную карточку не закрыть мимо кнопок
-  const sticky = (m.type === 'rules' && m.first) || m.type === 'punish' || m.type === 'bodyMap' || m.spinning;
+  const sticky = (m.type === 'rules' && m.first) || m.type === 'punish' || m.type === 'bodyMap' || m.type === 'forgive' || m.spinning;
   return `<div class="overlay" ${sticky ? '' : 'data-act="closeModal" data-self="1"'}><div class="sheet">${body}</div></div>`;
 }
 
@@ -1666,9 +1701,20 @@ async function deriveKey(pw) {
 
 async function decryptWith(key) {
   const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(DECK.iv) }, key, fromB64(DECK.data));
-  const deck = new Function(new TextDecoder().decode(plain) + '\nreturn { TOYS, PENALTIES, CARDS };')();
-  ({ TOYS, PENALTIES, CARDS } = deck);
+  const deck = new Function(new TextDecoder().decode(plain) +
+    '\nreturn { TOYS, PENALTIES, CARDS, FORGIVE: typeof FORGIVE === "undefined" ? {} : FORGIVE };')();
+  ({ TOYS, PENALTIES, CARDS, FORGIVE } = deck);
   CARDS = CARDS.concat(state.customCards || []);   // свои карты пары — в общую колоду
+  cleanState();
+}
+
+// Карты, которых больше нет в колоде (удалили), — убрать из отложенного, избранного и текущей игры
+function cleanState() {
+  const has = id => !!byId(id);
+  state.later = state.later.filter(x => has(x.id));
+  for (const k of ['fav', 'never']) for (const id of Object.keys(state[k] || {})) if (!has(id)) delete state[k][id];
+  for (const k of ['scenario', 'playing', 'drawn']) if (state[k] && !has(state[k].id)) state[k] = null;
+  save();
 }
 
 // Пароль -> ключ; ключ запоминаем на телефоне, чтобы не спрашивать снова
