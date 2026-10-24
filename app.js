@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 43;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 44;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -11,6 +11,7 @@ const HE_CHANCE = 0.5;             // доля «ОН» в стрелке
 const FAV_WEIGHT = 3;
 const JOKER_WEIGHT = 3;            // джокер выпадает чаще обычной карты
 const RARE_WEIGHT = 0.1;           // «слишком игровые» сценарии в режиме «Сейчас»
+const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
 const LATER_PER_TURN = 5;          // пятое «потом» за ход — красная карточка и ход партнёру
 const LATER_TO_NEVER = 10;         // столько раз отложили — карта уходит в «Никогда»
 const NEW_TOY_WEIGHT = 12;         // только что купленная игрушка выпадает почти сразу
@@ -31,7 +32,7 @@ const BODY_MAP = [
 ];
 const TYPE = {
   scenario: { one: 'Сценарий', many: 'Сценарии', sym: '✦', desc: 'Один на 3 часа' },
-  pose: { one: 'Поза', many: 'Позы', sym: '❦', desc: 'Одна за ход' },
+  pose: { one: 'Поза', many: 'Позы', sym: '❦', desc: `До ${POSES_PER_TURN} за ход` },
   action: { one: 'Действие', many: 'Действия', sym: '✧', desc: 'Одно за ход' },
 };
 const RESULT = {
@@ -59,6 +60,7 @@ function emptyState() {
     playing: null,        // { id, leader, start }
     drawn: null,          // { id, from } — вытянутая карта ждёт решения
     newToy: null,         // только что купленная игрушка — с неё начинается следующая игра
+    stopWord: '',         // стоп-слово пары — видно на паузе, в правилах и на острых картах
     penaltyDue: null,     // { who, title, text, ts } — наказание назначено и не выполнено: игра стоит
     turnUsed: {},         // тип → уже взят в этом ходе (за ход — 1 сценарий, 1 поза, 1 действие)
     turnLater: 0,         // сколько раз за ход нажали «Давай потом»
@@ -86,6 +88,7 @@ function save() {
 }
 
 let state = load();
+for (const id of ['jk-scenario', 'jk-pose', 'jk-action']) delete state.never[id];   // джокер нельзя потерять
 
 // Экран и всплывающие окна — не сохраняются
 const ui = {
@@ -221,8 +224,9 @@ function used(type) { return state.game ? state.game[type] || 0 : 0; }
 function canDraw(type) {
   if (!state.leader) return 'Сначала выберите ведущего';
   if (type === 'scenario' && state.scenario) return 'Сценарий уже идёт — переиграть нельзя';
-  if (type !== 'scenario' && state.when === 'now' && used(type) >= MAX_PER_GAME) return `${TYPE[type].many} на эту игру закончились`;
-  if ((state.turnUsed || {})[type]) return `${TYPE[type].one} в этом ходе уже есть. Дальше — «Ход сделан»`;
+  const u = (state.turnUsed || {})[type];
+  if (type === 'pose' && (u || 0) >= POSES_PER_TURN) return `${POSES_PER_TURN} позы в этом ходе уже было. Дальше — «Ход сделан»`;
+  if (type !== 'pose' && u) return `${TYPE[type].one} в этом ходе уже есть. Дальше — «Ход сделан»`;
   return '';
 }
 
@@ -267,6 +271,12 @@ function pickRandom(type) {
     const joker = pool.find(c => c.joker);
     if (joker) return joker;
   }
+  // идёт сценарий — позы и действия близкой остроты: нежному нежное, жёсткому жёсткое
+  const sc = state.scenario && type !== 'scenario' ? byId(state.scenario.id) : null;
+  if (sc) {
+    const near = pool.filter(c => c.joker || Math.abs((c.lvl || 1) - (sc.lvl || 1)) <= 1);
+    if (near.length) pool = near;
+  }
   const shown = state.shown || {};
   const neutral = pool.filter(isNeutral);
   if (neutral.length) {
@@ -276,6 +286,7 @@ function pickRandom(type) {
   const t = now();
   const weights = pool.map(c => {
     let w = cardWeight(c);
+    if (sc && (c.lvl || 1) === (sc.lvl || 1)) w *= 2;   // та же острота, что у сценария, — чаще
     const seen = state.seen[c.id];
     if (seen && t - seen < 24 * 60 * MIN) w *= 0.25;   // недавно выпадала — реже
     return w;
@@ -342,7 +353,8 @@ function endTurn() {
 // Взяли карту в игру (или в планы): за ход — одна карта каждого типа; рейтинг растёт
 function markPlayed(card) {
   if (!state.turnUsed) state.turnUsed = {};
-  state.turnUsed[card.type] = true;
+  if (card.type === 'pose') state.turnUsed.pose = (state.turnUsed.pose || 0) + 1;
+  else state.turnUsed[card.type] = true;
   stat(card.id).p++;
 }
 
@@ -492,7 +504,7 @@ const actions = {
     state.later.push({ id: card.id, ts: now(), plan: wasPlan || state.when === 'next' });
     log(card.id, 'later');
     const st = stat(card.id);
-    st.l++;
+    if (!card.joker) st.l++;   // джокер «Потом» не понижает и в «Никогда» сам не уходит
     if (!inGift()) state.turnLater = (state.turnLater || 0) + 1;   // в подарок «Потом» без лимита
     ui.screen = 'dash'; state.drawn = null;
     if (st.l >= LATER_TO_NEVER) {
@@ -722,6 +734,10 @@ const actions = {
   clearLaterYes() { state.later = []; save(); ui.modal = null; toast('Отложенное очищено'); },
   peekUnlater() { removeLater(ui.peek); save(); ui.peek = null; ui.deckFor = null; toast('Убрано из отложенного'); },
   unfav(d) { delete state.fav[d.id]; save(); },
+  setStopWord() {
+    state.stopWord = $('#stopWord').value.trim();
+    save(); toast(state.stopWord ? `Стоп-слово: «${state.stopWord}»` : 'Стоп-слово очищено');
+  },
   setPin() {
     const v = $('#newPin').value.trim();
     if (!/^\d{4}$/.test(v)) return toast('Нужно 4 цифры');
@@ -921,7 +937,7 @@ function dashView() {
   } else {
     h += deckBtn('scenario', '');
   }
-  h += deckBtn('pose', (state.turnUsed || {}).pose ? '✓ в ходе' : '') + playedChips('pose');
+  h += deckBtn('pose', (state.turnUsed || {}).pose ? `${state.turnUsed.pose} / ${POSES_PER_TURN}` : '') + playedChips('pose');
   h += deckBtn('action', (state.turnUsed || {}).action ? '✓ в ходе' : '') + playedChips('action');
   h += state.turnPlays
     ? `<div class="who-row"><button class="btn" data-act="turnDone">Ход сделан — ${turnDoneText()}</button></div>`
@@ -1020,6 +1036,7 @@ function cardHtml(card, L) {
     <div class="card-body">`;
   if (t.intro) h += `<p>${esc(t.intro)}</p>`;
   if (t.order) h += `<div class="box order"><b>Приказ — прочитай вслух</b>${esc(t.order)}</div>`;
+  if ((card.lvl || 1) >= 3) h += `<div class="stopword">Стоп-слово: ${state.stopWord ? `<b>«${esc(state.stopWord)}»</b>` : '<button class="textlink" data-act="go" data-s="settings">не задано — задать</button>'} — останавливает всё сразу</div>`;
   const toys = (card.needs || []).map(n => {
     const ok = !miss.includes(n);
     return `<span class="chip ${ok ? 'have' : 'miss'}">${n.split('|').map(toyName).map(esc).join(' или ')}${ok ? '' : ' — нет'}</span>`;
@@ -1058,7 +1075,7 @@ function cardScreen() {
     : `<div class="card-actions">
     <button class="btn primary" data-act="play">Играем</button>
     <button class="btn" data-act="later">Давай потом</button>
-    <button class="btn" data-act="never">Никогда</button>
+    ${card.joker ? '' : '<button class="btn" data-act="never">Никогда</button>'}
   </div>`;
   h += `<div class="card-tools">
     <button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
@@ -1150,6 +1167,10 @@ function settingsView() {
   h += list('Отложено и в планах', 'Предлагаются первыми в следующей игре. Убрать можно по одной или все сразу.', state.later.map(x => x.id), 'unlater', 'убрать');
   if (state.later.length) h += `<div class="who-row"><button class="btn ghost small" data-act="clearLater">Очистить всё отложенное</button></div>`;
   h += list('Никогда', 'Эти карты больше не выпадают. Можно вернуть, если передумали.', Object.keys(state.never), 'unnever', 'вернуть');
+
+  h += `<div class="set-sec"><h2>Стоп-слово</h2><p class="lead">Слово, которое останавливает игру сразу и без штрафов. Его увидите на паузе, в правилах и на острых картах.</p>
+    <div class="addrow"><input id="stopWord" class="field" placeholder="Например: красный" value="${esc(state.stopWord || '')}"><button class="btn small" data-act="setStopWord">Сохранить</button></div>
+  </div>`;
 
   h += `<div class="set-sec"><h2>Код на вход</h2><p class="lead">Приложение будет спрашивать 4 цифры при каждом открытии.</p>
     ${state.pin
@@ -1343,7 +1364,7 @@ function modalView() {
       <ul class="rules">
         <li>Вас двое: <b>ОН</b> и <b>ОНА</b>. Ведущий — <b>верхний</b>, партнёр — <b>нижний</b> и подчиняется полностью.</li>
         <li>Ведущего выбирает <b>стрелка</b> или играете <b>по очереди</b>.</li>
-        <li>За ход — <b>1 сценарий, 1 поза и 1 действие</b>. Закончил — «Ход сделан».</li>
+        <li>За ход — <b>1 сценарий, до ${POSES_PER_TURN} поз и 1 действие</b>. Закончил — «Ход сделан».</li>
         <li>Выпала карта: <b>Играем</b>, <b>Потом</b> или <b>Никогда</b> — тогда карта исчезнет, ход уйдёт партнёру на ${FORCED_TURNS} раза и будет <b>красная карточка</b>. Слишком много «Потом» за ход — тоже красная карточка.</li>
         <li><b>★ Любимые карты</b> (в избранном) выпадают чаще.</li>
         <li><b>★ Джокер</b> — карт-бланш: любая карта из списка или своя фантазия.</li>
@@ -1352,7 +1373,7 @@ function modalView() {
         <li>🎁 Вместо своего хода можно <b>подарить</b> партнёру 3–5 ходов или весь вечер: первая карта — джокер, «Потом» без ограничений, без мазо-карт.</li>
         <li>Карту можно прочитать вслух, а можно положить телефон <b>экраном вниз</b> и устроить сюрприз. Проверить — потом, в журнале.</li>
         <li>У каждой карты есть <b>минимальное время</b>: не на отвяжись.</li>
-        <li><b>Стоп-слово сильнее любых правил.</b> Прозвучало — останавливаетесь сразу, без штрафов и вопросов.</li>
+        <li><b>Стоп-слово сильнее любых правил.</b> ${state.stopWord ? `Ваше — <b>«${esc(state.stopWord)}»</b>. ` : 'Задайте его в Настройках. '}Прозвучало — останавливаетесь сразу, без штрафов и вопросов.</li>
       </ul>
       <div class="btns"><button class="btn primary" data-act="rulesOk">${m.first ? 'Нам есть 18. Играем' : 'Понятно'}</button></div>`;
       break;
@@ -1427,7 +1448,7 @@ function modalView() {
     }
 
     case 'stop':
-      body = `<h2>Пауза</h2><p class="lead">Стоп-слово — без штрафов и без вопросов. Выдохните, попейте воды, обнимитесь. Если что-то задело — скажите об этом сейчас, а не завтра.</p>
+      body = `<h2>Пауза</h2>${state.stopWord ? `<p class="lead" style="color:var(--text)">Прозвучало «${esc(state.stopWord)}».</p>` : ''}<p class="lead">Стоп-слово — без штрафов и без вопросов. Выдохните, попейте воды, обнимитесь. Если что-то задело — скажите об этом сейчас, а не завтра.</p>
       <div class="btns"><button class="btn primary" data-act="stopGoOn">Всё хорошо, продолжаем</button><button class="btn" data-act="stopEnd">Заканчиваем на сегодня</button></div>`;
       break;
 

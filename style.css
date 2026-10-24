@@ -164,6 +164,8 @@ textarea.field { resize: vertical; font: inherit; }
 .note.switch { background: rgba(123, 75, 179, .14); border-color: rgba(123, 75, 179, .55); }
 .box.order { background: rgba(168, 35, 59, .14); border: 1px solid rgba(195, 58, 82, .55); font-family: var(--serif); font-size: 19px; line-height: 1.4; }
 .box.order b { color: #ff9fae; font-family: var(--sans); }
+.stopword { font-size: 13px; color: #ff9fae; margin: -4px 0 12px; }
+.stopword .textlink { padding: 0; color: #ff9fae; }
 .card-body { padding: 18px 20px 22px; }
 .card-body p { margin: 0 0 14px; }
 .steps { margin: 0 0 16px; padding: 0; list-style: none; counter-reset: s; }
