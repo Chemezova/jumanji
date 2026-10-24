@@ -284,6 +284,14 @@ textarea.field { resize: vertical; font: inherit; }
 .res.never, .res.punish, .res.refuse { color: #e89aa8; border-color: rgba(168,35,59,.6); }
 .res.later, .res.plan { color: var(--gold); border-color: rgba(201,164,108,.5); }
 
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.stat { padding: 14px 12px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); text-align: center; }
+.stat .nm { font-family: var(--serif); font-size: 18px; letter-spacing: .1em; }
+.stat .big { font-family: var(--serif); font-size: 40px; line-height: 1.1; margin-top: 4px; }
+.stat .mid { font-family: var(--serif); font-size: 20px; margin-top: 8px; }
+.stat.M.win { border-color: var(--he); }
+.stat.F.win { border-color: var(--she); }
+
 /* ---------- Замок ---------- */
 .pw-row { position: relative; width: 100%; max-width: 300px; }
 .pw-row .field { margin: 0; padding-right: 96px; }

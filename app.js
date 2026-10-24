@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 41;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 42;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -718,6 +718,8 @@ const actions = {
   },
   delPin() { state.pin = ''; save(); toast('Код снят'); },
   resetGame() { ui.modal = { type: 'resetGame' }; },
+  clearLog() { ui.modal = { type: 'clearLog' }; },
+  clearLogYes() { state.log = []; save(); ui.modal = null; toast('Журнал стёрт'); },
   resetGameYes() {
     Object.assign(state, { leader: null, forced: null, game: null, scenario: null, playing: null, drawn: null, turnPlays: 0 });
     ui.skipLater = {};
@@ -1207,6 +1209,7 @@ function journalView() {
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Журнал</h1>
     <p class="lead" style="color:var(--muted);margin:0">Здесь можно проверить, что на самом деле выпало ведущему.</p>`;
   if (!state.log.length) return h + `<div class="empty" style="margin-top:20px">Пока пусто</div>`;
+  h += statsHtml();
   let day = '';
   h += state.log.slice().reverse().map(e => {
     const c = e.id ? byId(e.id) : null;
@@ -1220,7 +1223,32 @@ function journalView() {
       <div class="grow"><div>${title}</div>${c && e.note ? `<div class="meta">«${esc(e.note)}»</div>` : ''}<div class="meta">${hm(e.ts)} · ${e.r === 'punish' || e.r === 'paid' ? 'штраф для' : 'ведёт'} ${NAME[e.L] || '—'}${dur}</div></div>
       <span class="res ${e.r}">${RESULT[e.r] || e.r}</span></li>`;
   }).join('') + '</ul>';
+  h += `<div class="who-row" style="justify-content:center;margin-top:24px"><button class="textlink" data-act="clearLog">Стереть</button></div>`;
   return h;
+}
+
+// Соцсоревнование: кто сколько раз вёл и сколько часов это длилось — за всю историю
+function statsHtml() {
+  const st = { M: { n: 0, ms: 0, pun: 0 }, F: { n: 0, ms: 0, pun: 0 } };
+  for (const e of state.log) {
+    if (!st[e.L]) continue;
+    if (e.r === 'play') st[e.L].n++;
+    if ((e.r === 'done' || e.r === 'stop') && e.dur) st[e.L].ms += e.dur;
+    if (e.r === 'punish') st[e.L].pun++;
+  }
+  const hours = ms => {
+    const m = Math.round(ms / MIN);
+    return m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${pad2(m % 60)} мин`;
+  };
+  const lead = st.M.n === st.F.n ? null : (st.M.n > st.F.n ? 'M' : 'F');
+  const col = L => `<div class="stat ${L} ${lead === L ? 'win' : ''}">
+      <div class="nm">${NAME[L]}${lead === L ? ' ♛' : ''}</div>
+      <div class="big">${st[L].n}</div><div class="meta">${plural(st[L].n, 'раз', 'раза', 'раз')} ${L === 'F' ? 'вела' : 'вёл'}</div>
+      <div class="mid">${hours(st[L].ms)}</div><div class="meta">в роли ${L === 'F' ? 'ведущей' : 'ведущего'}</div>
+      <div class="meta">наказан${L === 'F' ? 'а' : ''}: ${st[L].pun}</div>
+    </div>`;
+  return `<div class="stats">${col('M')}${col('F')}</div>
+    <p class="meta" style="text-align:center;margin:6px 0 0">${lead ? `Лидирует ${NAME[lead]}` : 'Пока ничья'} · считаются карты, взятые в игру, и время по «Сыграли»</p>`;
 }
 
 function deckLockView() {
@@ -1404,6 +1432,11 @@ function modalView() {
     case 'clearLater':
       body = `<h2>Очистить отложенное?</h2><p class="lead">Все карты из «Отложено и в планах» вернутся в обычные колоды. Список покупок не изменится.</p>
       <div class="btns"><button class="btn primary" data-act="clearLaterYes">Очистить</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
+      break;
+
+    case 'clearLog':
+      body = `<h2>Стереть журнал?</h2><p class="lead">Вся история игр и статистика «кто сколько вёл» исчезнут насовсем. Колода, избранное, арсенал и настройки останутся.</p>
+      <div class="btns"><button class="btn primary" data-act="clearLogYes">Стереть</button><button class="btn ghost" data-act="closeModal">Оставить</button></div>`;
       break;
 
     case 'resetGame':
