@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 53;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 54;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -1445,6 +1445,8 @@ function settingsView() {
 
   h += unavailableHtml();
 
+  h += backupHtml();
+
   h += `<div class="set-sec"><h2>Код на вход</h2><p class="lead">Приложение будет спрашивать 4 цифры при каждом открытии.</p>
     ${state.pin
       ? `<button class="btn small" data-act="delPin">Снять код</button>`
@@ -1815,6 +1817,26 @@ function modalView() {
       <div class="btns"><button class="btn primary" data-act="clearLogYes">Стереть</button><button class="btn ghost" data-act="closeModal">Оставить</button></div>`;
       break;
 
+    case 'backup':
+      body = `<h2>Копия готова</h2><p class="lead">Файл «${esc(ui.backupFile.name)}». Нажмите «Сохранить» и выберите «Сохранить в Файлы» или Яндекс Диск.</p>
+      <div class="btns"><button class="btn primary" data-act="backupShare">Сохранить</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
+      break;
+
+    case 'restorePw':
+      body = `<form data-form="restorePwGo"><h2>Нужен старый пароль</h2><p class="lead">Копия сделана, когда у колоды был другой пароль. Введите тот пароль — он нужен только чтобы открыть файл.</p>
+      <input id="restorePw" class="field" type="password" autocomplete="off" autocapitalize="off" placeholder="Пароль на момент копии">
+      <div class="btns"><button class="btn primary" type="submit">Открыть</button><button class="btn ghost" type="button" data-act="closeModal">Отмена</button></div></form>`;
+      break;
+
+    case 'restoreYes': {
+      const b = ui.restore;
+      const plays = (b.state.log || []).filter(e => e.r === 'play').length;
+      body = `<h2>Восстановить копию?</h2><p class="lead">Копия от ${new Date(b.ts).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}: сыграно карт — ${plays}, отложено — ${(b.state.later || []).length}, игрушек в арсенале — ${Object.values(b.state.toys || {}).filter(Boolean).length}.</p>
+      <p class="lead">Всё, что сейчас на телефоне, заменится этой копией.</p>
+      <div class="btns"><button class="btn primary" data-act="restoreGo">Восстановить</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
+      break;
+    }
+
     case 'resetGame':
       body = `<h2>Стереть сессию?</h2><p class="lead">Исчезнут текущая игра, ведущий, подарок ходов, невыполненное наказание и все отложенные и назначенные карты. Журнал сыгранного, избранное, арсенал, покупки и настройки останутся.</p>
       <div class="btns"><button class="btn primary" data-act="resetGameYes">Стереть</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
@@ -1944,6 +1966,104 @@ async function openSavedDeck() {
     try { localStorage.removeItem(KEY_STORE); } catch (e2) {}   // пароль сменили — спросим заново
   }
 }
+
+// ---------- Резервная копия ----------
+// Всё состояние игры одним файлом, зашифрованным ключом колоды: без пароля файл не прочитать.
+// На новом телефоне сначала вводят пароль колоды, потом «Восстановить из копии».
+const BACKUP_KIND = 'jumanji-backup';
+const BACKUP_REMIND_DAYS = 30;
+
+const bigB64 = buf => {   // toB64 падает на больших файлах — кодируем кусками
+  const b = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+
+async function backupKey(pw) {
+  const raw = pw ? await crypto.subtle.exportKey('raw', await deriveKey(pw)) : fromB64(localStorage.getItem(KEY_STORE) || '');
+  return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+function backupHtml() {
+  const last = state.lastBackup;
+  const old = !last || now() - last > BACKUP_REMIND_DAYS * 24 * 60 * MIN;
+  const when = last ? new Date(last).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  return `<div class="set-sec"><h2>Резервная копия</h2>
+    <p class="lead">Журнал, календарь, арсенал, покупки, избранное, свои карты и настройки — одним файлом. Файл зашифрован паролем колоды: без пароля его не прочитать. Храните в «Файлах» или на Яндекс Диске.</p>
+    <p class="lead" ${old ? 'style="color:var(--gold)"' : ''}>${last ? `Последняя копия: ${when}.` : 'Копий ещё не было.'}${old ? ' Пора сохранить свежую.' : ''}</p>
+    <div class="btns" style="display:grid;gap:10px">
+      <button class="btn" data-act="backup">Сохранить копию</button>
+      <label class="btn ghost" style="text-align:center">Восстановить из копии<input id="restoreFile" type="file" accept=".json,application/json" hidden></label>
+    </div></div>`;
+}
+
+Object.assign(actions, {
+  backup() {
+    (async () => {
+      const key = await backupKey();
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(state)));
+      const body = JSON.stringify({ kind: BACKUP_KIND, v: 1, app: APP_VERSION, ts: now(), iv: toB64(iv), data: bigB64(data) });
+      ui.backupFile = new File([body], `jumanji-${today()}.json`, { type: 'application/json' });
+      ui.modal = { type: 'backup' };
+      render();
+    })().catch(() => toast('Не получилось сделать копию'));
+    return 'norender';
+  },
+  // отдельная кнопка: iPhone разрешает «Поделиться» только прямо по нажатию
+  backupShare() {
+    const file = ui.backupFile;
+    const done = () => { state.lastBackup = now(); save(); ui.modal = null; render(); toast('Копия сохранена'); };
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: file.name }).then(done).catch(e => { if (e.name !== 'AbortError') toast('Не получилось отправить файл'); });
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file);
+      a.download = file.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      done();
+    }
+    return 'norender';
+  },
+  restorePwGo() {
+    const pw = ($('#restorePw').value || '').replace(/[\s\u200B-\u200D\uFEFF]/g, '');
+    if (!pw) { toast('Введите пароль'); return 'norender'; }
+    openBackup(ui.restoreRaw, pw);
+    return 'norender';
+  },
+  restoreGo() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(ui.restore.state)); } catch (e) { toast('Не хватило места на телефоне'); return; }
+    location.reload();
+    return 'norender';
+  },
+});
+
+async function openBackup(raw, pw) {
+  try {
+    const key = await backupKey(pw);
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(raw.iv) }, key, fromB64(raw.data));
+    ui.restore = { ts: raw.ts, state: JSON.parse(new TextDecoder().decode(plain)) };
+    ui.modal = { type: 'restoreYes' };
+  } catch (e) {
+    if (pw) toast('Пароль не подходит');
+    ui.modal = { type: 'restorePw' };
+  }
+  render();
+}
+
+document.addEventListener('change', e => {
+  if (e.target.id !== 'restoreFile' || !e.target.files[0]) return;
+  e.target.files[0].text().then(text => {
+    let raw;
+    try { raw = JSON.parse(text); } catch (err) { raw = null; }
+    if (!raw || raw.kind !== BACKUP_KIND) return toast('Это не копия Джуманджи');
+    ui.restoreRaw = raw;
+    openBackup(raw);
+  });
+  e.target.value = '';
+});
 
 document.addEventListener('submit', e => {
   const form = e.target.closest('[data-form]');
