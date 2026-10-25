@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 66;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 67;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -19,7 +19,7 @@ const AUTHOR_IDS = new Set([
   'bd-positions', 'tp-cat', 'tp-doll', 'tp-ready', 'tp-collar', 'tp-prisoner', 'tp-under', 'bd-sheer',
   'bd-torn-tights', 'bd-mini', 'bd-coat', 'bd-heels', 'bd-his-outfit', 'bd-deep-throat', 'bd-titfuck', 'bd-facesit',
   'bd-lower', 'bd-plug',
-  'sc-teacher', 'ac-double', 'ac-all-at-once', 'ac-a-spot', 'ac-nipples', 'sc-bondage-photo', 'sc-kept',
+  'sc-teacher', 'ac-double', 'ac-all-at-once', 'ac-a-spot', 'ac-nipples', 'sc-bondage-photo', 'sc-kept', 'buy-any',
 ]);          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
 const PREP_DAYS = 7;               // за сколько дней назначенное попадает в «Рекомендую приготовиться»
@@ -107,6 +107,7 @@ const MERGED = {
   'bd-count': 'ac-spank', 'bs-maid-strict': 'sc-maid', 'ac-nuru': 'po-oil-slide',
   'ac-couples-tease': 'ac-remote-home', 'bs-stripper': 'sc-strip-club', 'ac-on-command': 'ac-countdown',
   'po-seated-reverse': 'po-living-chair', 'po-office-chair': 'po-chair', 'sc-blind-date': 'sc-strangers',
+  'buy-douche': 'buy-any', 'ac-buy-suction': 'buy-any',   // отдельные покупки убраны — хватает общей карты
 };
 let state = load();
 // перенести отметки со слитых карт на оставшиеся
