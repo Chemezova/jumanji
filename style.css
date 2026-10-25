@@ -349,3 +349,10 @@ details.unav summary .grow { flex: 1; }
 details.unav summary::after { content: "›"; color: var(--muted); font-size: 18px; transition: transform .2s; }
 details.unav[open] summary::after { transform: rotate(90deg); }
 details.fold > summary h2 .meta { font-family: system-ui, -apple-system, sans-serif; }
+
+/* ---------- Облако подборки, свои наказания ---------- */
+.cloud-h { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 10px 0 4px; text-align: left; width: 100%; }
+.links.cloud { justify-content: flex-start; width: 100%; }
+.links.cloud .chip.have { background: rgba(80,160,100,.18); border-color: #4f9a63; color: #9fdcae; }
+.links.cloud .chip.dice { border-style: dashed; }
+label.keep { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); margin: 8px 0 0; }

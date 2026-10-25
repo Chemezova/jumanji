@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 54;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 55;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -26,7 +26,9 @@ const AUTHOR_IDS = new Set([
 ]);          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
 const PREP_DAYS = 7;               // за сколько дней назначенное попадает в «Рекомендую приготовиться»
-const PASS_PER_TURN = 3;          // «Не сейчас»: третий за ход отдаёт ход партнёру (без штрафа)
+const PASS_PER_TURN = 3;
+const REL_PER_TURN = 3;            // из облака подборки — до 3 поз и до 3 действий за ход
+const REL_SHOW = 10;               // сколько карт каждого вида показывать в облаке          // «Не сейчас»: третий за ход отдаёт ход партнёру (без штрафа)
 const LATER_PER_TURN = 5;          // пятое «потом» за ход — красная карточка и ход партнёру
 const LATER_TO_NEVER = 10;         // столько раз отложили — карта уходит в «Никогда»
 const NEW_TOY_WEIGHT = 12;         // только что купленная игрушка выпадает почти сразу
@@ -270,6 +272,8 @@ function canDraw(type) {
 function fits(card, L) {
   if (state.never[card.id]) return false;
   if (card.switch && inGift()) return false;   // в свой подарок получатель нижним не становится
+  // «Ход в подарок» — только в начале обычного хода и только на сегодня
+  if (card.gift && (state.when !== 'now' || state.forced || state.turnPlays || state.playing)) return false;
   if ((card.lvl || 1) > state.lvlMax) return false;
   if (card.leaders && !card.leaders.includes(topFor(card, L))) return false;
   if (state.when === 'now') {
@@ -288,9 +292,9 @@ function cardWeight(c) {
   if (st.p) w *= 1 + Math.min(st.p, 5) * 0.2;
   if (st.l) w *= Math.pow(0.8, st.l);
   if (c.rare && state.when === 'now') w *= RARE_WEIGHT;
-  if (AUTHOR_IDS.has(c.id)) w *= AUTHOR_WEIGHT;
+  if (AUTHOR_IDS.has(c.id) || c.gift) w *= AUTHOR_WEIGHT;   // «Ход в подарок» — как карты Елены
   // выбранная острота выпадает чаще, сильно мягче неё — реже
-  const gap = state.lvlMax - (c.lvl || 1);
+  const gap = c.gift ? 1 : state.lvlMax - (c.lvl || 1);   // у «Хода в подарок» остроты нет — ни бонуса, ни штрафа
   if (gap === 0) w *= SPICE_WEIGHT;
   else if (gap >= 2) w *= 0.5;
   if (state.newToy && usesToy(c, state.newToy)) w *= NEW_TOY_WEIGHT;   // новинка — первой
@@ -300,7 +304,7 @@ function cardWeight(c) {
 // Карта без рейтинга — нейтральная: такие идут по очереди, пока не выпадут все
 function isNeutral(c) {
   const st = (state.stats || {})[c.id];
-  return !state.fav[c.id] && !(st && (st.p || st.l)) && !c.rare && !c.joker && !(state.newToy && usesToy(c, state.newToy));
+  return !state.fav[c.id] && !(st && (st.p || st.l)) && !c.rare && !c.joker && !c.gift && !(state.newToy && usesToy(c, state.newToy));
 }
 
 function pickRandom(type) {
@@ -389,7 +393,7 @@ function waitDecision() {
 function passBtn() {
   if (state.drawn && state.drawn.from !== 'deck') return '';
   const left = inGift() ? Infinity : PASS_PER_TURN - (state.turnPass || 0);
-  const note = left === Infinity ? '' : left <= 1 ? ' · последний, дальше ход партнёру' : ` · осталось ${left}`;
+  const note = left === Infinity ? '' : left > 1 ? ` · осталось ${left}` : state.turnPlays ? ' · последний' : ' · последний, дальше ход партнёру';
   return `<button class="btn ghost" style="grid-column:1/-1" data-act="pass">Не сейчас${note}</button>`;
 }
 
@@ -397,6 +401,9 @@ function resetTurn() {
   state.turnPlays = 0;
   state.turnUsed = {};
   state.turnUsedNext = {};
+  state.turnPassed = {};   // тип → карты, пропущенные «Не сейчас» в этом ходе
+  state.turnLocked = {};   // тип → пропуски кончились, берём только из выпавшего
+  state.turnTaken = [];    // что взято в этом ходе (для облака подборки)
   state.turnLater = 0;
   state.turnPass = 0;
 }
@@ -417,8 +424,9 @@ function endTurn() {
 // Взяли карту в игру (или в планы): за ход — одна карта каждого типа; рейтинг растёт
 function markPlayed(card) {
   const u = usedNow();
-  if (card.type === 'pose') u.pose = (u.pose || 0) + 1;
-  else u[card.type] = true;
+  if (card.type === 'scenario') u.scenario = true;
+  else u[card.type] = (u[card.type] || 0) + 1;   // действий из облака может быть до трёх
+  (state.turnTaken || (state.turnTaken = [])).push(card.id);
   stat(card.id).p++;
 }
 
@@ -501,6 +509,7 @@ const actions = {
     if (state.drawn) { ui.screen = 'card'; window.scrollTo(0, 0); return; }   // сначала решение по вытянутой
     const why = canDraw(d.t);
     if (why) return toast(why);
+    if ((state.turnLocked || {})[d.t]) { ui.modal = { type: 'seen', t: d.t }; return; }
     if (state.when === 'now' && !ui.skipLater[d.t]) {
       const p = pendingFor(d.t);
       if (p.length) { ui.modal = { type: 'pending', t: d.t, id: p[0].id }; return; }
@@ -517,6 +526,53 @@ const actions = {
     setTimeout(() => { ui.screen = 'card'; state.drawn = { id: card.id, from: 'deck' }; save(); render(); window.scrollTo(0, 0); }, 1400);
     return 'norender';
   },
+  seenPick(d) {
+    ui.modal = null;
+    state.drawn = { id: d.id, from: 'seen' }; save();
+    ui.screen = 'card'; window.scrollTo(0, 0);
+  },
+  // «Ход в подарок»: ход сразу уходит партнёру на один ход, без штрафа
+  giftTurn() {
+    const was = state.leader;
+    state.drawn = null;
+    endTurn();
+    state.leader = other(was);
+    state.log.push({ ts: now(), id: null, L: other(was), r: 'gift', n: 1, note: 'Ход в подарок — выпала карта' });
+    save(); ui.screen = 'dash';
+    toast(`🎁 Ход в подарок: ведёт ${NAME[other(was)]}`);
+  },
+  // облако подборки: отметить карту — она взята в игру; отметить ещё раз — вернуть
+  relTake(d) {
+    if (state.penaltyDue) return waitPenalty();
+    const card = byId(d.id);
+    const u = usedNow();
+    if ((state.turnTaken || []).includes(card.id)) return relUndo(card);
+    if (card.type === 'scenario' && state.scenario) return toast('Сценарий уже идёт');
+    if (card.type !== 'scenario' && (u[card.type] || 0) >= (card.type === 'pose' ? POSES_PER_TURN : REL_PER_TURN))
+      return toast(`${TYPE[card.type].many} в этом ходе — уже ${u[card.type]}. Дальше — «Ход сделан»`);
+    ensureGame();
+    const top = topFor(card, state.leader);
+    removeLater(card.id);
+    if (card.type === 'scenario') state.scenario = { id: card.id, leader: top, start: now() };
+    else state.game[card.type] = used(card.type) + 1;
+    log(card.id, 'play', { L: top, via: 'rel' });
+    markPlayed(card);
+    state.turnPlays++;
+    save();
+  },
+  relRandom(d) {
+    const pool = relatedFor(byId(d.id)).filter(c => c.type === d.t && !(state.turnTaken || []).includes(c.id));
+    if (!pool.length) return toast('В облаке больше ничего нет');
+    return actions.relTake({ id: pool[Math.floor(Math.random() * pool.length)].id });
+  },
+  // свои наказания
+  addPenalty() {
+    const text = ($('#myPenText').value || '').trim();
+    if (!text) return toast('Напишите наказание');
+    (state.myPenalties || (state.myPenalties = [])).push({ title: penTitle(text), text, lvl: +$('#myPenLvl').value || 1 });
+    save(); toast('Добавлено в наказания');
+  },
+  delPenalty(d) { state.myPenalties.splice(+d.i, 1); save(); },
   openPlanned(d) {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
@@ -619,8 +675,17 @@ const actions = {
   pass() {
     const card = byId(state.drawn.id);
     state.drawn = null;
+    const seen = state.turnPassed || (state.turnPassed = {});
+    (seen[card.type] || (seen[card.type] = [])).push(card.id);
     if (!inGift()) {   // в подарок — перебирать сколько угодно
       state.turnPass = (state.turnPass || 0) + 1;
+      // в ходе уже что-то взято — ход не отнимаем: раздел закрывается, выбрать можно из того, что выпало
+      if (state.turnPass >= PASS_PER_TURN && state.turnPlays) {
+        (state.turnLocked || (state.turnLocked = {}))[card.type] = true;
+        save(); ui.screen = 'dash';
+        ui.modal = { type: 'seen', t: card.type };
+        return;
+      }
       if (state.turnPass >= PASS_PER_TURN) {   // третий пропуск — ход переходит, без штрафа
         endTurn(); save(); ui.screen = 'dash';
         return toast(`${PASS_PER_TURN} пропуска — ход переходит` + (state.leader ? `: ведёт ${NAME[state.leader]}` : '. Крутите стрелку заново'));
@@ -721,9 +786,10 @@ const actions = {
   // штрафы
   penalty(d) {
     const m = ui.modal;
-    const allowed = PENALTIES.map((p, i) => i).filter(i => (PENALTIES[i].lvl || 1) <= state.lvlMax);
+    const all = allPenalties();
+    const allowed = all.map((p, i) => i).filter(i => (all[i].lvl || 1) <= state.lvlMax);
     const i = d.i === 'rand' ? allowed[Math.floor(Math.random() * allowed.length)] : +d.i;
-    const p = PENALTIES[i];
+    const p = all[i];
     state.log.push({ ts: now(), id: null, L: m.who, r: 'punish', note: `${p.title} — ${m.reason}` });
     state.penaltyDue = { who: m.who, title: p.title, text: p.text, ts: now() };
     save();
@@ -732,6 +798,8 @@ const actions = {
   penaltyOwn() {
     const text = $('#ownPenalty').value.trim();
     if (!text) return toast('Напишите, чего хотите');
+    if ($('#ownPenaltyKeep') && $('#ownPenaltyKeep').checked)
+      (state.myPenalties || (state.myPenalties = [])).push({ title: penTitle(text), text, lvl: 1 });
     const m = ui.modal;
     state.log.push({ ts: now(), id: null, L: m.who, r: 'punish', note: `Прихоть: ${text} — ${m.reason}` });
     state.penaltyDue = { who: m.who, title: 'Прихоть', text, ts: now() };
@@ -1198,10 +1266,10 @@ function ornament(type) {
 function cardHtml(card, L) {
   const t = cardFor(card, L);
   const miss = missingNeeds(card);
-  let h = `<article class="card ${card.joker ? 'joker' : ''} ${card.switch ? 'switch' : ''}">
+  let h = `<article class="card ${card.joker || card.gift ? 'joker' : ''} ${card.switch ? 'switch' : ''}">
     <div class="card-head">
       ${ornament(card.type)}
-      <div class="card-type"><span>${card.joker ? '★ Джокер · ' : ''}${card.switch ? '⇅ Мазо · ' : ''}${TYPE[card.type].one}</span><span>${card.switch ? 'ведёт' : 'для ведущего'}: ${NAME[L]}</span></div>
+      <div class="card-type"><span>${card.joker ? '★ Джокер · ' : ''}${card.gift ? '🎁 ' : ''}${card.switch ? '⇅ Мазо · ' : ''}${TYPE[card.type].one}</span><span>${card.switch ? 'ведёт' : 'для ведущего'}: ${NAME[L]}</span></div>
       <h1>${esc(t.title)}</h1>
       <div class="teaser">${esc(card.teaser || '')}</div>
       <div class="facts">
@@ -1245,6 +1313,7 @@ function cardScreen() {
   h += cardHtml(card, topFor(card, L));
   if (card.joker) h += `<div class="sec">Моя фантазия</div><textarea id="jokerWish" class="field" rows="3" placeholder="Что именно ты хочешь. Партнёр увидит это в журнале — потом"></textarea>
     <div class="who-row"><button class="btn gold" data-act="jokerPick">★ Выбрать любую карту: ${TYPE[card.type].many.toLowerCase()} и избранное</button></div>`;
+  if (card.gift) return h + `<div class="card-actions"><button class="btn gold" style="grid-column:1/-1" data-act="giftTurn">🎁 Отдать ход — ведёт ${NAME[other(L)]}</button></div>`;
   h += card.switch
     ? `<div class="card-actions">
     <button class="btn primary" data-act="play">Принимаю — я ${L === 'F' ? 'нижняя' : 'нижний'}</button>
@@ -1284,6 +1353,7 @@ function playingView() {
       <button class="btn primary" data-act="done">Сыграли</button>
       <button class="btn ghost" data-act="refused">${NAME[other(p.leader)]} отказывается подчиняться</button>
     </div>
+    ${cloudHtml()}
     <div class="sec" style="margin-bottom:0">Добавить к игре</div>
     <div class="who-row" style="width:100%;margin-top:0">
       ${state.scenario ? '' : '<button class="btn small" style="flex:1" data-act="draw" data-t="scenario">+ Сценарий</button>'}
@@ -1291,6 +1361,71 @@ function playingView() {
       <button class="btn small" style="flex:1" data-act="draw" data-t="action">+ Действие</button>
     </div>
   </div>`;
+}
+
+// Подборка к карте: у сценария — его список (rel), у позы и действия — сценарии, где они есть,
+// и соседи по этим сценариям (чем чаще вместе, тем выше)
+function relatedFor(card) {
+  if (!card) return [];
+  let list;
+  if (card.type === 'scenario') list = (card.rel || []).map(byId);
+  else {
+    const scs = CARDS.filter(c => (c.rel || []).includes(card.id));
+    const score = {};
+    for (const sc of scs) for (const id of sc.rel) if (id !== card.id) score[id] = (score[id] || 0) + 1;
+    list = scs.concat(Object.keys(score).sort((a, b) => score[b] - score[a]).map(byId));
+  }
+  return list.filter(c => c && c.id !== card.id && c.type !== card.type && !c.joker && !c.gift && fits(c, state.leader));
+}
+
+// Облако под картой в игре: идёт сценарий — подборка к нему, иначе — к карте в игре
+function cloudHtml() {
+  if (state.when === 'next') return '';
+  const base = state.scenario ? byId(state.scenario.id) : state.playing && byId(state.playing.id);
+  const rel = relatedFor(base);
+  if (!rel.length) return '';
+  const taken = state.turnTaken || [];
+  const u = usedNow();
+  const rows = ['scenario', 'pose', 'action'].map(t => {
+    if (t === 'scenario' && state.scenario) return '';
+    const cards = rel.filter(c => c.type === t).slice(0, REL_SHOW);
+    if (!cards.length) return '';
+    const limit = t === 'scenario' ? '' : ` · ${u[t] || 0} из ${t === 'pose' ? POSES_PER_TURN : REL_PER_TURN}`;
+    return `<div class="cloud-h">${TYPE[t].many}${limit}</div><div class="links cloud">${cards.map(c =>
+      `<button class="chip ${taken.includes(c.id) ? 'have' : ''}" data-act="relTake" data-id="${c.id}">${taken.includes(c.id) ? '✓ ' : ''}${esc(cardFor(c, topFor(c, state.leader)).title)}</button>`).join('')}
+      <button class="chip dice" data-act="relRandom" data-id="${base.id}" data-t="${t}">🎲 Случайно</button></div>`;
+  }).join('');
+  return rows ? `<div class="sec" style="margin-bottom:4px">Подходит к «${esc(cardFor(base, topFor(base, state.leader)).title)}»</div>
+    <p class="lead" style="margin:0 0 6px;font-size:13px;color:var(--muted)">Нажми — карта в игре. Ещё раз — убрать.</p>${rows}` : '';
+}
+
+// Отменить карту, взятую из облака в этом ходе
+function relUndo(card) {
+  const i = state.log.map(e => e.id === card.id && e.r === 'play').lastIndexOf(true);
+  if (i >= 0) state.log.splice(i, 1);
+  state.turnTaken = state.turnTaken.filter(id => id !== card.id);
+  const u = usedNow();
+  if (card.type === 'scenario') { u.scenario = false; if (state.scenario && state.scenario.id === card.id) state.scenario = null; }
+  else { u[card.type] = Math.max(0, (u[card.type] || 1) - 1); if (state.game) state.game[card.type] = Math.max(0, used(card.type) - 1); }
+  const st = stat(card.id); st.p = Math.max(0, st.p - 1);
+  state.turnPlays = Math.max(0, state.turnPlays - 1);
+  save();
+}
+
+// Наказания: из колоды + свои (сохраняются из Красной карточки или из Колоды → Наказания)
+function allPenalties() {
+  return PENALTIES.concat((state.myPenalties || []).map(p => Object.assign({ mine: true }, p)));
+}
+function penTitle(text) { return text.length > 40 ? text.slice(0, 38).replace(/\s+\S*$/, '') + '…' : text; }
+
+function penaltiesHtml() {
+  const mine = state.myPenalties || [];
+  return `<ul class="list">${PENALTIES.map(p => `<li><span>✕</span><div class="grow"><div>${esc(p.title)}</div><div class="meta">${esc(p.text)}</div></div><span class="meta">${peppers(p.lvl || 1)}</span></li>`).join('')}
+    ${mine.map((p, i) => `<li><span>✎</span><div class="grow"><div>${esc(p.title)}</div>${p.text !== p.title ? `<div class="meta">${esc(p.text)}</div>` : ''}</div><span class="meta">${peppers(p.lvl || 1)}</span><button class="x" data-act="delPenalty" data-i="${i}">удалить</button></li>`).join('')}</ul>
+    <div class="sec">Своё наказание</div>
+    <textarea id="myPenText" class="field" rows="2" placeholder="Например: весь вечер подаёт напитки на коленях"></textarea>
+    <div class="addrow"><select id="myPenLvl" class="field"><option value="1">🌶</option><option value="2">🌶🌶</option><option value="3">🌶🌶🌶</option></select>
+      <button class="btn small" data-act="addPenalty">Добавить</button></div>`;
 }
 
 function peekView() {
@@ -1445,6 +1580,8 @@ function settingsView() {
 
   h += unavailableHtml();
 
+  h += fold('pen', `Наказания <span class="meta">${allPenalties().length}</span>`, 'Список Красной карточки и ваши свои наказания.', penaltiesHtml(), false);
+
   h += backupHtml();
 
   h += `<div class="set-sec"><h2>Код на вход</h2><p class="lead">Приложение будет спрашивать 4 цифры при каждом открытии.</p>
@@ -1472,8 +1609,10 @@ function deckView() {
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Колода</h1>
     <p class="lead" style="color:var(--muted);margin:0">Всего карт: ${CARDS.length}. Нажмите на карту, чтобы открыть её целиком.</p>
     <input id="deckSearch" class="field" type="search" placeholder="Поиск: врач, наручники, ванна…" value="${esc(ui.deckQuery || '')}" autocomplete="off">
-    <div class="seg">${Object.keys(TYPE).map(k => `<button class="${t === k ? 'on' : ''}" data-act="deckType" data-t="${k}">${TYPE[k].many} · ${CARDS.filter(c => c.type === k).length}</button>`).join('')}</div>
-    <div class="seg"><button class="${lead === 'M' ? 'on' : ''}" data-act="deckLead" data-l="M">Ведёт ОН</button><button class="${lead === 'F' ? 'on' : ''}" data-act="deckLead" data-l="F">Ведёт ОНА</button></div>
+    <div class="seg">${Object.keys(TYPE).map(k => `<button class="${t === k ? 'on' : ''}" data-act="deckType" data-t="${k}">${TYPE[k].many} · ${CARDS.filter(c => c.type === k).length}</button>`).join('')}
+      <button class="${t === 'penalty' ? 'on' : ''}" data-act="deckType" data-t="penalty">Наказания · ${allPenalties().length}</button></div>`;
+  if (t === 'penalty') return h + `<p class="lead" style="color:var(--muted);margin:10px 0 0">Список Красной карточки. Свои наказания сохраняются и дальше предлагаются вместе с остальными.</p>${penaltiesHtml()}`;
+  h += `<div class="seg"><button class="${lead === 'M' ? 'on' : ''}" data-act="deckLead" data-l="M">Ведёт ОН</button><button class="${lead === 'F' ? 'on' : ''}" data-act="deckLead" data-l="F">Ведёт ОНА</button></div>
     <ul class="list" id="deckList" style="margin-top:12px">${deckListHtml()}</ul>`;
   return h;
 }
@@ -1494,7 +1633,7 @@ function deckListHtml() {
   }
   if (!list.length) return `<li class="empty">Ничего не нашлось</li>`;
   return list.map(c => `<li data-act="deckView" data-id="${c.id}">
-      <span>${c.joker ? '★' : c.mine ? '✎' : TYPE[c.type].sym}</span>
+      <span>${c.joker ? '★' : c.gift ? '🎁' : c.mine ? '✎' : TYPE[c.type].sym}</span>
       <div class="grow"><div>${esc(cardFor(c, lead).title)}${state.never[c.id] ? ' <span class="res never">никогда</span>' : ''}</div>
         <div class="meta">${q ? TYPE[c.type].one + ' · ' : ''}${esc(c.teaser || '')}</div></div>
       <span class="meta" style="white-space:nowrap">${peppers(c.lvl || 1)} ${duration(c.min, true)}</span>
@@ -1524,7 +1663,7 @@ function jokerDeckView() {
   const t = ui.jokerPick;
   const L = state.leader;
   const q = (ui.deckQuery || '').trim();
-  const ok = CARDS.filter(c => c.type === t && !c.joker && !state.never[c.id] && (!c.leaders || c.leaders.includes(topFor(c, L))) && (!q || matches(c, q)));
+  const ok = CARDS.filter(c => c.type === t && !c.joker && !c.gift && !state.never[c.id] && (!c.leaders || c.leaders.includes(topFor(c, L))) && (!q || matches(c, q)));
   const favs = ok.filter(c => state.fav[c.id]).sort(byMix);
   const rest = ok.filter(c => !state.fav[c.id]).sort(byMix);
   const row = c => `<li>
@@ -1733,15 +1872,25 @@ function modalView() {
       <div class="btns"><button class="btn primary" data-act="skipYes">Пропустить и принять штраф</button><button class="btn ghost" data-act="closeModal">Остаться</button></div>`;
       break;
 
+    case 'seen': {
+      const list = ((state.turnPassed || {})[m.t] || []).map(byId).filter(c => c && fits(c, state.leader) && !(state.turnTaken || []).includes(c.id));
+      body = `<h2>${TYPE[m.t].many}: пропуски кончились</h2>
+      <p class="lead">${list.length ? 'В этом ходе можно взять только то, что уже выпало:' : 'Из выпавшего ничего не осталось. Заканчивай ход кнопкой «Ход сделан».'}</p>
+      ${list.map(c => `<button class="pen" data-act="seenPick" data-id="${c.id}"><b>${TYPE[c.type].sym} ${esc(cardFor(c, topFor(c, state.leader)).title)}</b><span>${esc(c.teaser || '')}</span></button>`).join('')}
+      <div class="btns"><button class="btn ghost" data-act="closeModal">Закрыть</button></div>`;
+      break;
+    }
+
     case 'punish': {
       const judge = m.by || other(m.who);
       body = `<div class="redcard"></div><h2 style="text-align:center">Красная карточка</h2>
       <p class="lead" style="text-align:center">${NAME[judge]} решает, как наказать ${m.who === 'M' ? 'его' : 'её'} за ${esc(m.reason)}.</p>
-      ${PENALTIES.map((p, i) => (p.lvl || 1) > state.lvlMax ? '' : `<button class="pen" data-act="penalty" data-i="${i}"><b>${esc(p.title)}</b><span>${esc(p.text)}</span></button>`).join('')}
+      ${allPenalties().map((p, i) => (p.lvl || 1) > state.lvlMax ? '' : `<button class="pen" data-act="penalty" data-i="${i}"><b>${p.mine ? '✎ ' : ''}${esc(p.title)}</b><span>${esc(p.text)}</span></button>`).join('')}
       <button class="pen" data-act="penalty" data-i="rand"><b>Случайное наказание</b><span>Пусть решит колода</span></button>
       <button class="pen" data-act="bodyMap"><b>🎯 Карта наказаний</b><span>Колесо выбирает место на теле — ягодицы, бёдра, ступни, ладони или соски</span></button>
       <div class="sec">Своя прихоть</div>
       <div class="addrow"><input id="ownPenalty" class="field" placeholder="Например: весь вечер без белья"><button class="btn small" data-act="penaltyOwn">Назначить</button></div>
+      <label class="keep"><input id="ownPenaltyKeep" type="checkbox"> Сохранить в список наказаний</label>
       <div class="btns"><button class="btn ghost" data-act="forgive">Простить…</button></div>`;
       break;
     }
@@ -1878,7 +2027,7 @@ async function wakeLock() {
 function releaseWake() { try { wake && wake.release(); } catch (e) {} wake = null; }
 
 document.addEventListener('input', e => {
-  if (e.target.id === 'deckSearch') { ui.deckQuery = e.target.value; $('#deckList').innerHTML = deckListHtml(); }
+  if (e.target.id === 'deckSearch') { ui.deckQuery = e.target.value; if ($('#deckList')) $('#deckList').innerHTML = deckListHtml(); }
   if (e.target.id === 'jokerSearch') { ui.deckQuery = e.target.value; const box = document.createElement('div'); box.innerHTML = jokerDeckView(); $('#jokerList').replaceWith(box.querySelector('#jokerList')); }
 });
 
