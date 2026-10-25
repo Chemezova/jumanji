@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 56;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 57;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -265,6 +265,10 @@ function canDraw(type) {
   if (type === 'scenario' && state.scenario && state.when !== 'next') return 'Сценарий уже идёт — переиграть нельзя';
   const u = usedNow()[type];
   if (type === 'pose' && (u || 0) >= POSES_PER_TURN) return `${POSES_PER_TURN} позы в этом ходе уже было. Дальше — «Ход сделан»`;
+  // действия: одно за ход, а пока идёт сценарий — до трёх (из облака и из колоды вместе)
+  const maxA = state.scenario && state.when === 'now' ? REL_PER_TURN : 1;
+  if (type === 'action' && (u || 0) < maxA) return '';
+  if (type === 'action' && maxA > 1) return `${maxA} действия в этом ходе уже было. Дальше — «Ход сделан»`;
   if (type !== 'pose' && u) return `${TYPE[type].one} в этом ходе уже есть. Дальше — «Ход сделан»`;
   return '';
 }
@@ -411,6 +415,9 @@ function resetTurn() {
 function endTurn() {
   resetTurn();
   closePlaying();
+  const sc = state.scenario;   // сценарий, который шёл под позами и действиями, — тоже в журнал как сыгранный
+  if (sc && !state.log.some(e => e.r === 'done' && e.id === sc.id && e.ts >= sc.start))
+    state.log.push({ ts: now(), id: sc.id, L: sc.leader, r: 'done', dur: now() - sc.start });
   state.scenario = null;
   if (state.forced) {
     state.forced.left--;
@@ -441,7 +448,8 @@ function passTurn(L, reason) {
 function closePlaying() {
   const p = state.playing;
   if (!p) return;
-  state.log.push({ ts: now(), id: p.id, L: p.leader, r: 'done', dur: now() - p.start });
+  // сценарий от новой позы или действия не заканчивается — он идёт дальше, до «Сыграли» или «Ход сделан»
+  if (!(state.scenario && state.scenario.id === p.id)) state.log.push({ ts: now(), id: p.id, L: p.leader, r: 'done', dur: now() - p.start });
   state.playing = null;
 }
 
@@ -560,11 +568,8 @@ const actions = {
     state.turnPlays++;
     save();
   },
-  relRandom(d) {
-    const pool = relatedFor(byId(d.id)).filter(c => c.type === d.t && !(state.turnTaken || []).includes(c.id));
-    if (!pool.length) return toast('В облаке больше ничего нет');
-    return actions.relTake({ id: pool[Math.floor(Math.random() * pool.length)].id });
-  },
+  // подсказки мало — тянуть из всей колоды, как обычно
+  relRandom(d) { return actions.draw({ t: d.t }); },
   // свои наказания
   addPenalty() {
     const text = ($('#myPenText').value || '').trim();
@@ -1400,10 +1405,10 @@ function cloudHtml() {
     const limit = t === 'scenario' ? '' : ` · ${u[t] || 0} из ${t === 'pose' ? POSES_PER_TURN : REL_PER_TURN}`;
     return `<div class="cloud-h">${TYPE[t].many}${limit}</div><div class="links cloud">${cards.map(c =>
       `<button class="chip ${taken.includes(c.id) ? 'have' : ''}" data-act="relTake" data-id="${c.id}">${taken.includes(c.id) ? '✓ ' : ''}${esc(cardFor(c, topFor(c, state.leader)).title)}</button>`).join('')}
-      <button class="chip dice" data-act="relRandom" data-id="${base.id}" data-t="${t}">🎲 Случайно</button></div>`;
+      <button class="chip dice" data-act="relRandom" data-id="${base.id}" data-t="${t}">🎲 Из всей колоды</button></div>`;
   }).join('');
   return rows ? `<div class="sec" style="margin-bottom:4px">Подходит к «${esc(cardFor(base, topFor(base, state.leader)).title)}»</div>
-    <p class="lead" style="margin:0 0 6px;font-size:13px;color:var(--muted)">Нажми — карта в игре. Ещё раз — убрать.</p>${rows}` : '';
+    <p class="lead" style="margin:0 0 6px;font-size:13px;color:var(--muted)">Нажми — карта в игре, ещё раз — убрать. Мало подсказок — «Из всей колоды».</p>${rows}` : '';
 }
 
 // Отменить карту, взятую из облака в этом ходе
