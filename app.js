@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 61;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 62;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
