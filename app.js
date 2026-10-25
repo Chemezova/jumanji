@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 60;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 61;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -19,6 +19,7 @@ const AUTHOR_IDS = new Set([
   'bd-positions', 'tp-cat', 'tp-doll', 'tp-ready', 'tp-collar', 'tp-prisoner', 'tp-under', 'bd-sheer',
   'bd-torn-tights', 'bd-mini', 'bd-coat', 'bd-heels', 'bd-his-outfit', 'bd-deep-throat', 'bd-titfuck', 'bd-facesit',
   'bd-lower', 'bd-plug',
+  'sc-teacher', 'ac-double', 'ac-all-at-once', 'ac-a-spot', 'ac-nipples', 'sc-bondage-photo', 'sc-kept',
 ]);          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
 const PREP_DAYS = 7;               // за сколько дней назначенное попадает в «Рекомендую приготовиться»
@@ -1379,11 +1380,13 @@ function playingView() {
 function relatedFor(card) {
   if (!card) return [];
   let list;
-  if (card.type === 'scenario') list = (card.rel || []).map(byId);
+  // подборка бывает общей (список) или своей для ведущего ОН и ОНА ({ M, F })
+  const relIds = (c, L) => !c.rel ? [] : Array.isArray(c.rel) ? c.rel : L ? c.rel[L] || [] : (c.rel.M || []).concat(c.rel.F || []);
+  if (card.type === 'scenario') list = relIds(card, topFor(card, state.leader)).map(byId);
   else {
-    const scs = CARDS.filter(c => (c.rel || []).includes(card.id));
+    const scs = CARDS.filter(c => relIds(c).includes(card.id));
     const score = {};
-    for (const sc of scs) for (const id of sc.rel) if (id !== card.id) score[id] = (score[id] || 0) + 1;
+    for (const sc of scs) for (const id of relIds(sc)) if (id !== card.id) score[id] = (score[id] || 0) + 1;
     list = scs.concat(Object.keys(score).sort((a, b) => score[b] - score[a]).map(byId));
   }
   return list.filter(c => c && c.id !== card.id && c.type !== card.type && !c.joker && !c.gift && fits(c, state.leader));
