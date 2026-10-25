@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 57;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 58;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -408,6 +408,7 @@ function resetTurn() {
   state.turnPassed = {};   // тип → карты, пропущенные «Не сейчас» в этом ходе
   state.turnLocked = {};   // тип → пропуски кончились, берём только из выпавшего
   state.turnTaken = [];    // что взято в этом ходе (для облака подборки)
+  state.turnStart = now(); // с этого момента — карты нового хода (под кнопками колод)
   state.turnLater = 0;
   state.turnPass = 0;
 }
@@ -1218,10 +1219,12 @@ function dashView() {
   return h;
 }
 
-// Карты этой игры одного типа — под кнопкой колоды, нажатие открывает карту
+// Карты этого хода одного типа — под кнопкой колоды, нажатие открывает карту.
+// После «Ход сделан» список начинается заново; вся игра — ниже, в «В этой игре»
 function playedOf(type) {
   if (!state.game) return [];
-  return state.log.filter(e => e.ts >= state.game.start && e.r === 'play' && byId(e.id)?.type === type);
+  const from = Math.max(state.game.start, state.turnStart || 0);
+  return state.log.filter(e => e.ts >= from && e.r === 'play' && byId(e.id)?.type === type);
 }
 // Как подписать сыгранную карту: джокер — с загаданной фантазией, карта по джокеру — со звёздочкой
 function playedTitle(e, c) {
