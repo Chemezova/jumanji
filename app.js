@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 67;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 68;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -107,7 +107,9 @@ const MERGED = {
   'bd-count': 'ac-spank', 'bs-maid-strict': 'sc-maid', 'ac-nuru': 'po-oil-slide',
   'ac-couples-tease': 'ac-remote-home', 'bs-stripper': 'sc-strip-club', 'ac-on-command': 'ac-countdown',
   'po-seated-reverse': 'po-living-chair', 'po-office-chair': 'po-chair', 'sc-blind-date': 'sc-strangers',
-  'buy-douche': 'buy-any', 'ac-buy-suction': 'buy-any',   // отдельные покупки убраны — хватает общей карты
+  // отдельные покупки убраны — хватает общей карты
+  'buy-douche': 'buy-any', 'ac-buy-suction': 'buy-any', 'ac-buy-wand': 'buy-any', 'ac-buy-underbed': 'buy-any',
+  'ac-buy-glass': 'buy-any', 'buy-shackles': 'buy-any', 'buy-bdsm-kit': 'buy-any',
 };
 let state = load();
 // перенести отметки со слитых карт на оставшиеся
