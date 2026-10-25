@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 58;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 59;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -1214,7 +1214,7 @@ function dashView() {
         return `<li data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}"><span>${TYPE[c.type].sym}</span><span class="grow">${esc(playedTitle(e, c))}</span><span class="meta">${NAME[e.L]} · ${hm(e.ts)} ›</span></li>`;
       }).join('')}</ul>`
       : `<div class="empty">Пока ничего</div>`;
-    h += `<div class="who-row"><button class="btn ghost small" data-act="endGame">Завершить игру</button></div>`;
+    h += `<div class="who-row"><button class="btn primary small" data-act="endGame">Игра окончена</button></div>`;
   }
   return h;
 }
@@ -1971,8 +1971,8 @@ function modalView() {
       break;
 
     case 'endGame':
-      body = `<h2>Завершить игру?</h2><p class="lead">Всё, что сейчас идёт, будет отмечено сыгранным. Подаренный вечер тоже закончится.</p>
-      <div class="btns"><button class="btn primary" data-act="endGameYes">Завершить</button><button class="btn ghost" data-act="closeModal">Ещё играем</button></div>`;
+      body = `<h2>Игра окончена?</h2><p class="lead">Всё, что сейчас идёт, будет отмечено сыгранным. Подаренный вечер тоже закончится.</p>
+      <div class="btns"><button class="btn primary" data-act="endGameYes">Игра окончена</button><button class="btn ghost" data-act="closeModal">Ещё играем</button></div>`;
       break;
 
     case 'clearLater':
