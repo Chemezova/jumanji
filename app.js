@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 59;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 60;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -14,15 +14,11 @@ const RARE_WEIGHT = 0.1;
 const SPICE_WEIGHT = 2.5;
 const AUTHOR_WEIGHT = 2;           // карты, придуманные и расписанные Еленой, — чаще обычных
 const AUTHOR_IDS = new Set([
-  'sc-escort', 'sc-scientist', 'sc-commander', 'sc-porn-scene', 'sc-photoshoot', 'sc-masquerade',
-  'sc-no-hands-massage', 'sc-dirty', 'sc-pet', 'bs-inspection',
-  'ac-read-erotica', 'ac-wide-touch', 'ac-inner-training', 'ac-golden', 'ac-yoni', 'ac-gag',
-  'bo-hands', 'bo-legs', 'bo-frog', 'bo-wrists-ankles', 'bd-positions',
-  'tp-cat', 'tp-doll', 'tp-ready', 'tp-collar', 'tp-prisoner', 'tp-under',
-  'bd-sheer', 'bd-torn-tights', 'bd-mini', 'bd-coat', 'bd-heels', 'bd-his-outfit', 'bd-choose-tool', 'bd-buy-whip',
-  'bd-deep-throat', 'bd-titfuck', 'bd-facesit', 'bd-lower', 'bd-plug', 'bd-thighs', 'bd-soles', 'bd-front-flog', 'bd-palms',
-  'sw-spank', 'sw-kneel', 'sw-tied', 'sw-denial', 'sw-outfit', 'bs-reversal',
-  'buy-shackles', 'buy-douche', 'buy-bdsm-kit', 'buy-any',
+  'sc-escort', 'sc-scientist', 'sc-no-hands-massage', 'sc-dirty', 'ac-read-erotica', 'ac-wide-touch',
+  'ac-inner-training', 'ac-golden', 'ac-yoni', 'ac-gag', 'bo-hands', 'bo-legs', 'bo-frog', 'bo-wrists-ankles',
+  'bd-positions', 'tp-cat', 'tp-doll', 'tp-ready', 'tp-collar', 'tp-prisoner', 'tp-under', 'bd-sheer',
+  'bd-torn-tights', 'bd-mini', 'bd-coat', 'bd-heels', 'bd-his-outfit', 'bd-deep-throat', 'bd-titfuck', 'bd-facesit',
+  'bd-lower', 'bd-plug',
 ]);          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
 const PREP_DAYS = 7;               // за сколько дней назначенное попадает в «Рекомендую приготовиться»
