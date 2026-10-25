@@ -356,3 +356,5 @@ details.fold > summary h2 .meta { font-family: system-ui, -apple-system, sans-se
 .links.cloud .chip.have { background: rgba(80,160,100,.18); border-color: #4f9a63; color: #9fdcae; }
 .links.cloud .chip.dice { border-style: dashed; }
 label.keep { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); margin: 8px 0 0; }
+.cloud-box { margin: 8px 0 4px; padding: 4px 14px 12px; border: 1px solid var(--line); border-radius: 16px; }
+.cloud-box .sec { margin-top: 10px; }

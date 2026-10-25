@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 55;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 56;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -687,8 +687,11 @@ const actions = {
         return;
       }
       if (state.turnPass >= PASS_PER_TURN) {   // третий пропуск — ход переходит, без штрафа
-        endTurn(); save(); ui.screen = 'dash';
-        return toast(`${PASS_PER_TURN} пропуска — ход переходит` + (state.leader ? `: ведёт ${NAME[state.leader]}` : '. Крутите стрелку заново'));
+        const was = state.leader;
+        endTurn();
+        if (!state.forced) state.leader = other(was);   // и со стрелкой — сразу партнёру, а не новый розыгрыш
+        save(); ui.screen = 'dash';
+        return toast(`${PASS_PER_TURN} пропуска — ход переходит: ведёт ${NAME[state.leader]}`);
       }
     }
     save();
@@ -1175,6 +1178,7 @@ function dashView() {
       <div class="d">Сценарий идёт · ведёт ${NAME[sc.leader]}</div></div>
       <div class="cnt" data-left="${sc.start}">${clock(GAME_MS - (now() - sc.start))}</div>
     </button>`;
+    h += `<div class="cloud-box">${cloudHtml()}</div>`;
   } else {
     h += deckBtn('scenario', u.scenario ? '✓ в ходе' : '');
   }
@@ -1313,6 +1317,9 @@ function cardScreen() {
   h += cardHtml(card, topFor(card, L));
   if (card.joker) h += `<div class="sec">Моя фантазия</div><textarea id="jokerWish" class="field" rows="3" placeholder="Что именно ты хочешь. Партнёр увидит это в журнале — потом"></textarea>
     <div class="who-row"><button class="btn gold" data-act="jokerPick">★ Выбрать любую карту: ${TYPE[card.type].many.toLowerCase()} и избранное</button></div>`;
+  const rel = card.type === 'scenario' && state.when === 'now' ? relatedFor(card) : [];
+  if (rel.length) h += `<div class="sec">К этому сценарию подойдёт</div><div class="links">${rel.slice(0, 12).map(c => `<span class="chip">${TYPE[c.type].sym} ${esc(cardFor(c, topFor(c, L)).title)}</span>`).join('')}</div>
+    <p class="meta" style="margin:4px 0 0">Нажми «Играем» — и отмечай из этого списка позы и действия в игру.</p>`;
   if (card.gift) return h + `<div class="card-actions"><button class="btn gold" style="grid-column:1/-1" data-act="giftTurn">🎁 Отдать ход — ведёт ${NAME[other(L)]}</button></div>`;
   h += card.switch
     ? `<div class="card-actions">
@@ -1421,7 +1428,10 @@ function penTitle(text) { return text.length > 40 ? text.slice(0, 38).replace(/\
 function penaltiesHtml() {
   const mine = state.myPenalties || [];
   return `<ul class="list">${PENALTIES.map(p => `<li><span>✕</span><div class="grow"><div>${esc(p.title)}</div><div class="meta">${esc(p.text)}</div></div><span class="meta">${peppers(p.lvl || 1)}</span></li>`).join('')}
-    ${mine.map((p, i) => `<li><span>✎</span><div class="grow"><div>${esc(p.title)}</div>${p.text !== p.title ? `<div class="meta">${esc(p.text)}</div>` : ''}</div><span class="meta">${peppers(p.lvl || 1)}</span><button class="x" data-act="delPenalty" data-i="${i}">удалить</button></li>`).join('')}</ul>
+    ${mine.map((p, i) => `<li><span>✎</span><div class="grow"><div>${esc(p.title)}</div>${p.text !== p.title ? `<div class="meta">${esc(p.text)}</div>` : ''}</div><span class="meta">${peppers(p.lvl || 1)}</span><button class="x" data-act="delPenalty" data-i="${i}">удалить</button></li>`).join('')}
+    <li><span>🎲</span><div class="grow"><div>Случайное наказание</div><div class="meta">Колода выбирает сама — из всех наказаний выше, не острее выбранной остроты</div></div></li></ul>
+    <details class="unav"><summary><span>🎯</span><span class="grow">Карта наказаний — колесо</span><span class="meta">${BODY_MAP.length} зон</span></summary>
+      <ul class="list">${BODY_MAP.map(z => `<li><div class="grow"><div>${esc(z.zone)}</div><div class="meta">${esc(z.how)}</div></div></li>`).join('')}</ul></details>
     <div class="sec">Своё наказание</div>
     <textarea id="myPenText" class="field" rows="2" placeholder="Например: весь вечер подаёт напитки на коленях"></textarea>
     <div class="addrow"><select id="myPenLvl" class="field"><option value="1">🌶</option><option value="2">🌶🌶</option><option value="3">🌶🌶🌶</option></select>
@@ -1436,6 +1446,7 @@ function peekView() {
   return `<div class="peek"><div class="inner">
     <button class="back" data-act="peekClose">‹ Закрыть</button>
     ${cardHtml(card, L)}
+    ${(state.scenario && state.scenario.id === card.id) || (state.playing && state.playing.id === card.id) ? `<div class="cloud-box">${cloudHtml()}</div>` : ''}
     <div class="card-tools"><button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
       ${state.later.some(x => x.id === card.id) ? '<button class="textlink" data-act="peekUnlater">Убрать из отложенного</button>' : ''}</div>
   </div></div>`;
