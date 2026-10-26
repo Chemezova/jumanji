@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 68;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 69;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -31,7 +31,7 @@ const LATER_TO_NEVER = 10;         // столько раз отложили —
 const NEW_TOY_WEIGHT = 12;         // только что купленная игрушка выпадает почти сразу
 
 // Колода приходит зашифрованной (deck.js) и заполняется после ввода пароля
-let TOYS = [], PENALTIES = [], CARDS = [], FORGIVE = {};
+let TOYS = [], PENALTIES = [], CARDS = [], FORGIVE = {}, ZONES = [];
 
 const NAME = { M: 'ОН', F: 'ОНА' };
 
@@ -273,8 +273,12 @@ function canDraw(type) {
   return '';
 }
 
+// Запретные зоны: тема выключена в Настройках — карта и наказание с ней пропадают отовсюду
+const zoneOff = c => (c.zones || []).some(z => (state.offZones || {})[z]);
+
 function fits(card, L) {
   if (state.never[card.id]) return false;
+  if (zoneOff(card)) return false;
   if (card.switch && inGift()) return false;   // в свой подарок получатель нижним не становится
   // «Ход в подарок» — только в начале обычного хода и только на сегодня
   if (card.gift && (state.when !== 'now' || state.forced || state.turnPlays || state.playing)) return false;
@@ -361,7 +365,7 @@ const due = x => !x.day || x.day <= today();
 function pendingFor(type) {
   return state.later.filter(x => due(x)).filter(x => {
     const c = byId(x.id);
-    return c && c.type === type && !state.never[c.id] && (!c.leaders || c.leaders.includes(state.leader))
+    return c && c.type === type && !state.never[c.id] && !zoneOff(c) && (!c.leaders || c.leaders.includes(state.leader))
       && (c.when !== 'next' || x.plan) && !missingNeeds(c).length
       && (!x.plan || (c.buy || []).every(hasToy));   // запланированное ждёт, пока купите нужное
   });
@@ -577,6 +581,11 @@ const actions = {
     if (!text) return toast('Напишите наказание');
     (state.myPenalties || (state.myPenalties = [])).push({ title: penTitle(text), text, lvl: +$('#myPenLvl').value || 1 });
     save(); toast('Добавлено в наказания');
+  },
+  zoneToggle(d) {
+    const off = state.offZones || (state.offZones = {});
+    if (off[d.id]) delete off[d.id]; else off[d.id] = true;
+    save();
   },
   delPenalty(d) { state.myPenalties.splice(+d.i, 1); save(); },
   openPlanned(d) {
@@ -1431,17 +1440,17 @@ function relUndo(card) {
 
 // Наказания: из колоды + свои (сохраняются из Красной карточки или из Колоды → Наказания)
 function allPenalties() {
-  return PENALTIES.concat((state.myPenalties || []).map(p => Object.assign({ mine: true }, p)));
+  return PENALTIES.concat((state.myPenalties || []).map(p => Object.assign({ mine: true }, p))).filter(p => !zoneOff(p));
 }
 function penTitle(text) { return text.length > 40 ? text.slice(0, 38).replace(/\s+\S*$/, '') + '…' : text; }
 
 function penaltiesHtml() {
   const mine = state.myPenalties || [];
-  return `<ul class="list">${PENALTIES.map(p => `<li><span>✕</span><div class="grow"><div>${esc(p.title)}</div><div class="meta">${esc(p.text)}</div></div><span class="meta">${peppers(p.lvl || 1)}</span></li>`).join('')}
+  return `<ul class="list">${PENALTIES.filter(p => !zoneOff(p)).map(p => `<li><span>✕</span><div class="grow"><div>${esc(p.title)}</div><div class="meta">${esc(p.text)}</div></div><span class="meta">${peppers(p.lvl || 1)}</span></li>`).join('')}
     ${mine.map((p, i) => `<li><span>✎</span><div class="grow"><div>${esc(p.title)}</div>${p.text !== p.title ? `<div class="meta">${esc(p.text)}</div>` : ''}</div><span class="meta">${peppers(p.lvl || 1)}</span><button class="x" data-act="delPenalty" data-i="${i}">удалить</button></li>`).join('')}
     <li><span>🎲</span><div class="grow"><div>Случайное наказание</div><div class="meta">Колода выбирает сама — из всех наказаний выше, не острее выбранной остроты</div></div></li></ul>
-    <details class="unav"><summary><span>🎯</span><span class="grow">Карта наказаний — колесо</span><span class="meta">${BODY_MAP.length} зон</span></summary>
-      <ul class="list">${BODY_MAP.map(z => `<li><div class="grow"><div>${esc(z.zone)}</div><div class="meta">${esc(z.how)}</div></div></li>`).join('')}</ul></details>
+    ${(state.offZones || {}).pain ? '' : `<details class="unav"><summary><span>🎯</span><span class="grow">Карта наказаний — колесо</span><span class="meta">${BODY_MAP.length} зон</span></summary>
+      <ul class="list">${BODY_MAP.map(z => `<li><div class="grow"><div>${esc(z.zone)}</div><div class="meta">${esc(z.how)}</div></div></li>`).join('')}</ul></details>`}
     <div class="sec">Своё наказание</div>
     <textarea id="myPenText" class="field" rows="2" placeholder="Например: весь вечер подаёт напитки на коленях"></textarea>
     <div class="addrow"><select id="myPenLvl" class="field"><option value="1">🌶</option><option value="2">🌶🌶</option><option value="3">🌶🌶🌶</option></select>
@@ -1550,6 +1559,20 @@ function calendarHtml() {
   return h;
 }
 
+// Запретные зоны: по умолчанию включено всё; выключенная тема пропадает из игры целиком
+function zonesHtml() {
+  if (!ZONES.length) return '';
+  const off = state.offZones || {};
+  const nOff = ZONES.filter(z => off[z.id]).length;
+  const rows = `<ul class="list">${ZONES.map(z => {
+    const n = CARDS.filter(c => (c.zones || []).includes(z.id)).length;
+    return `<li><span class="grow">${esc(z.name)}<div class="meta">${z.hint ? esc(z.hint) + ' · ' : ''}${n} ${plural(n, 'карта', 'карты', 'карт')}</div></span>
+      <button class="toggle ${off[z.id] ? '' : 'on'}" data-act="zoneToggle" data-id="${z.id}" aria-label="${esc(z.name)}"></button></li>`;
+  }).join('')}</ul>`;
+  return fold('zones', `Запретные зоны${nOff ? ` <span class="meta">выключено ${nOff}</span>` : ''}`,
+    'Включено всё. Выключите тему — карты с ней перестанут выпадать и пропадут из колоды, подборок и наказаний. Включить обратно можно в любой момент.', rows, false);
+}
+
 function settingsView() {
   let h = `<button class="back" data-act="home">‹ Назад</button><h1 style="font-size:30px;margin:6px 0 4px">Настройки</h1>`;
 
@@ -1562,6 +1585,8 @@ function settingsView() {
   h += `<div class="set-sec"><h2>Острота</h2><p class="lead">Карты выбранной остроты выпадают чаще, острее — не выпадают совсем. Штрафы — тоже по этой остроте.</p><div class="seg">
     ${[1, 2, 3].map(v => `<button class="${state.lvlMax === v ? 'on' : ''}" data-act="lvl" data-v="${v}">${peppers(v)}</button>`).join('')}
   </div></div>`;
+
+  h += zonesHtml();
 
   h += fold('cal', 'Календарь', 'Назначенные и отложенные карты, а ниже — что уже сыграно. Нажмите на день; дату можно перенести.', calendarHtml(), true);
 
@@ -1643,7 +1668,7 @@ function deckListHtml() {
   const t = ui.deckType || 'scenario';
   const lead = ui.deckLead || 'M';
   const q = (ui.deckQuery || '').trim();
-  const ok = c => !c.leaders || c.leaders.includes(lead);
+  const ok = c => (!c.leaders || c.leaders.includes(lead)) && !zoneOff(c);
   let list;
   if (q) list = CARDS.filter(c => ok(c) && matches(c, q)).sort(byMix);
   else {
@@ -1684,7 +1709,7 @@ function jokerDeckView() {
   const t = ui.jokerPick;
   const L = state.leader;
   const q = (ui.deckQuery || '').trim();
-  const ok = CARDS.filter(c => c.type === t && !c.joker && !c.gift && !state.never[c.id] && (!c.leaders || c.leaders.includes(topFor(c, L))) && (!q || matches(c, q)));
+  const ok = CARDS.filter(c => c.type === t && !c.joker && !c.gift && !state.never[c.id] && !zoneOff(c) && (!c.leaders || c.leaders.includes(topFor(c, L))) && (!q || matches(c, q)));
   const favs = ok.filter(c => state.fav[c.id]).sort(byMix);
   const rest = ok.filter(c => !state.fav[c.id]).sort(byMix);
   const row = c => `<li>
@@ -1908,7 +1933,7 @@ function modalView() {
       <p class="lead" style="text-align:center">${NAME[judge]} решает, как наказать ${m.who === 'M' ? 'его' : 'её'} за ${esc(m.reason)}.</p>
       ${allPenalties().map((p, i) => (p.lvl || 1) > state.lvlMax ? '' : `<button class="pen" data-act="penalty" data-i="${i}"><b>${p.mine ? '✎ ' : ''}${esc(p.title)}</b><span>${esc(p.text)}</span></button>`).join('')}
       <button class="pen" data-act="penalty" data-i="rand"><b>Случайное наказание</b><span>Пусть решит колода</span></button>
-      <button class="pen" data-act="bodyMap"><b>🎯 Карта наказаний</b><span>Колесо выбирает место на теле — ягодицы, бёдра, ступни, ладони или соски</span></button>
+      ${(state.offZones || {}).pain ? '' : `<button class="pen" data-act="bodyMap"><b>🎯 Карта наказаний</b><span>Колесо выбирает место на теле — ягодицы, бёдра, ступни, ладони или соски</span></button>`}
       <div class="sec">Своя прихоть</div>
       <div class="addrow"><input id="ownPenalty" class="field" placeholder="Например: весь вечер без белья"><button class="btn small" data-act="penaltyOwn">Назначить</button></div>
       <label class="keep"><input id="ownPenaltyKeep" type="checkbox"> Сохранить в список наказаний</label>
@@ -2101,8 +2126,8 @@ async function deriveKey(pw) {
 async function decryptWith(key) {
   const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(DECK.iv) }, key, fromB64(DECK.data));
   const deck = new Function(new TextDecoder().decode(plain) +
-    '\nreturn { TOYS, PENALTIES, CARDS, FORGIVE: typeof FORGIVE === "undefined" ? {} : FORGIVE };')();
-  ({ TOYS, PENALTIES, CARDS, FORGIVE } = deck);
+    '\nreturn { TOYS, PENALTIES, CARDS, FORGIVE: typeof FORGIVE === "undefined" ? {} : FORGIVE, ZONES: typeof ZONES === "undefined" ? [] : ZONES };')();
+  ({ TOYS, PENALTIES, CARDS, FORGIVE, ZONES } = deck);
   CARDS = CARDS.concat(state.customCards || []);   // свои карты пары — в общую колоду
   cleanState();
 }
