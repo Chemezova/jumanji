@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 71;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 72;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -195,18 +195,34 @@ function duration(min, short) {
 function peppers(n) { return '🌶'.repeat(n); }
 
 // Текст карточки под ведущего: заголовок, вступление, подсказка и игрушки заменяются,
-// шаги и лайфхаки — добавляются к общим
-function cardFor(card, L) {
+// шаги и лайфхаки — добавляются к общим.
+// Тон (нежно / игриво / жёстко): у карты с tones свой текст для soft и hard, «игриво» — обычный текст карты.
+// Шаги тона заменяют шаги ведущего, вступление, приказ и подсказка — тоже; лайфхаки тона добавляются.
+const TONES = { soft: 'Нежно', mid: 'Игриво', hard: 'Жёстко' };
+function cardFor(card, L, tone) {
   const own = card[L] || {};
+  const tn = tone && card.tones && card.tones[tone] ? Object.assign({}, card.tones[tone], card.tones[tone][L] || {}) : {};
   return {
-    title: own.title || card.title,
-    intro: own.intro || card.intro || '',
-    steps: (card.steps || []).concat(own.steps || []),
-    tips: (card.tips || []).concat(own.tips || []),
-    tell: own.tell || card.tell || '',
-    order: own.order || card.order || '',
+    title: tn.title || own.title || card.title,
+    teaser: tn.teaser || card.teaser || '',
+    intro: tn.intro || own.intro || card.intro || '',
+    steps: (card.steps || []).concat(tn.steps || own.steps || []),
+    tips: (card.tips || []).concat(own.tips || [], tn.tips || []),
+    tell: tn.tell || own.tell || card.tell || '',
+    order: tn.order || own.order || card.order || '',
     uses: own.uses || card.uses || [],
   };
+}
+// Тон по умолчанию — по остроте из Настроек
+function toneFor(card) {
+  if (!card.tones) return undefined;
+  return state.lvlMax <= 1 ? 'soft' : state.lvlMax === 2 ? 'mid' : 'hard';
+}
+// Переключатель тона над картой
+function toneSeg(card, cur, act) {
+  if (!card.tones) return '';
+  return `<div class="seg tone-seg">${Object.keys(TONES).filter(t => t === 'mid' || card.tones[t]).map(t =>
+    `<button class="${cur === t ? 'on' : ''}" data-act="${act}" data-t="${t}">${TONES[t]}</button>`).join('')}</div>`;
 }
 
 // Кто ведёт карту. Мазо-карта (switch) переворачивает роли: ведущий становится нижним,
@@ -615,6 +631,8 @@ const actions = {
     (state.myPenalties || (state.myPenalties = [])).push({ title: penTitle(text), text, lvl: +$('#myPenLvl').value || 1 });
     save(); toast('Добавлено в наказания');
   },
+  tone(d) { state.drawn.tone = d.t; save(); },
+  peekTone(d) { ui.peekTone = d.t; },
   zoneToggle(d) {
     const off = state.offZones || (state.offZones = {});
     if (off[d.id]) delete off[d.id]; else off[d.id] = true;
@@ -673,21 +691,22 @@ const actions = {
     removeLater(card.id);
     ensureGame();
     const top = state.drawn.top || topFor(card, state.leader);
-    log(card.id, 'play', Object.assign({ L: top }, state.drawn.from === 'joker' ? { via: 'joker' } : {}, jokerWish()));
+    const tone = state.drawn.tone;
+    log(card.id, 'play', Object.assign({ L: top }, state.drawn.from === 'joker' ? { via: 'joker' } : {}, tone ? { tone } : {}, jokerWish()));
     if (state.newToy && usesToy(card, state.newToy)) state.newToy = null;   // новинку обыграли
     markPlayed(card);
     state.turnPlays++;
     state.drawn = null; ui.jokerNote = '';
     // сценарий — рамка вечера: идёт на главной, а ход сразу переходит — дальше позы и действия к нему
     if (card.type === 'scenario') {
-      state.scenario = { id: card.id, leader: top, start: now() };
+      state.scenario = { id: card.id, leader: top, start: now(), tone };
       const t = turnOver();
       save(); ui.screen = 'dash'; window.scrollTo(0, 0);
       return toast(`Сценарий идёт.${t}`);
     }
     state.game[card.type] = used(card.type) + 1;
     closePlaying();
-    state.playing = { id: card.id, leader: top, start: now() };
+    state.playing = { id: card.id, leader: top, start: now(), tone };
     save();
     ui.screen = 'playing';
     window.scrollTo(0, 0);
@@ -850,7 +869,8 @@ const actions = {
 
   // идёт игра
   peek(d) { ui.peek = d.id; },
-  peekClose() { ui.peek = null; ui.deckFor = null; },
+  peekClose() {
+    ui.peekTone = null; ui.peek = null; ui.deckFor = null; },
   deckType(d) { ui.deckType = d.t; },
   deckLead(d) { ui.deckLead = d.l; },
   deckView(d) { ui.peek = d.id; ui.deckFor = ui.deckLead || 'M'; },
@@ -1328,7 +1348,7 @@ function playedOf(type) {
 // Как подписать сыгранную карту: джокер — с загаданной фантазией, карта по джокеру — со звёздочкой
 function playedTitle(e, c) {
   if (c.joker) return e.note ? `★ Джокер: ${e.note}` : '★ Джокер';
-  return (e.via === 'joker' ? '★ ' : '') + cardFor(c, e.L || 'M').title;
+  return (e.via === 'joker' ? '★ ' : '') + cardFor(c, e.L || 'M', e.tone).title + (e.tone && e.tone !== 'mid' ? ` · ${TONES[e.tone].toLowerCase()}` : '');
 }
 
 function playedChips(type) {
@@ -1376,15 +1396,15 @@ function ornament(type) {
   return `<svg class="ornament" viewBox="0 0 100 100"><path d="M50 8 L60 40 L92 50 L60 60 L50 92 L40 60 L8 50 L40 40 Z" fill="none" stroke="${g}" stroke-width="1.3"/><path d="M50 30 L55 45 L70 50 L55 55 L50 70 L45 55 L30 50 L45 45 Z" fill="${g}" opacity=".5"/></svg>`;
 }
 
-function cardHtml(card, L) {
-  const t = cardFor(card, L);
+function cardHtml(card, L, tone) {
+  const t = cardFor(card, L, tone);
   const miss = missingNeeds(card);
   let h = `<article class="card ${card.joker || card.gift ? 'joker' : ''} ${card.switch ? 'switch' : ''}">
     <div class="card-head">
       ${ornament(card.type)}
       <div class="card-type"><span>${card.joker ? '★ Джокер · ' : ''}${card.gift ? '🎁 ' : ''}${card.switch ? '⇅ Мазо · ' : ''}${TYPE[card.type].one}</span><span>${card.switch ? 'ведёт' : 'для ведущего'}: ${NAME[L]}</span></div>
       <h1>${esc(t.title)}</h1>
-      <div class="teaser">${esc(card.teaser || '')}</div>
+      <div class="teaser">${esc(t.teaser)}</div>
       <div class="facts">
         <span class="fact">${peppers(card.lvl || 1)}</span>
         <span class="fact">⏱ от ${duration(card.min)}</span>
@@ -1424,7 +1444,9 @@ function cardScreen() {
   else if (state.drawn.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
   else if (state.drawn.from === 'rel') h += `<div class="note soft" style="margin:40px 0 12px">Подсказка к сценарию — берём?</div>`;
   else h += `<div style="height:44px"></div>`;
-  h += cardHtml(card, state.drawn.top || topFor(card, L));
+  if (card.tones && !state.drawn.tone) state.drawn.tone = toneFor(card);
+  h += toneSeg(card, state.drawn.tone, 'tone');
+  h += cardHtml(card, state.drawn.top || topFor(card, L), state.drawn.tone);
   // джокер: выпал — значит, играешь; осталось выбрать во что. Кнопки «Играем» нет
   if (card.joker) return h + `<div class="note gift">★ Джокер — ты уже играешь, осталось выбрать во что: любая карта колоды или своя фантазия, сейчас или на другой день. Пока не выберешь, игра ждёт. Совет: отмечайте ☆ избранное заранее — здесь оно будет сверху.</div>
     <div class="who-row"><button class="btn gold" style="flex:1" data-act="jokerPick">★ Выбрать любую карту: ${TYPE[card.type].many.toLowerCase()} и избранное</button></div>
@@ -1528,9 +1550,12 @@ function peekView() {
   const sc = state.scenario && state.scenario.id === card.id ? state.scenario.leader : null;
   const pl = state.playing && state.playing.id === card.id ? state.playing.leader : null;
   const L = ui.deckFor || sc || pl || state.leader || 'M';
+  const inPlay = (state.scenario && state.scenario.id === card.id && state.scenario) || (state.playing && state.playing.id === card.id && state.playing);
+  const tone = inPlay ? inPlay.tone : ui.peekTone || toneFor(card);
   return `<div class="peek"><div class="inner">
     <button class="back" data-act="peekClose">‹ Закрыть</button>
-    ${cardHtml(card, L)}
+    ${inPlay ? (tone ? `<div class="note soft" style="margin-top:40px">Тон: ${TONES[tone]}</div>` : '') : toneSeg(card, tone, 'peekTone')}
+    ${cardHtml(card, L, tone)}
     ${state.scenario && state.scenario.id === card.id ? '<div class="who-row"><button class="btn small" data-act="scenarioDone">Сценарий сыгран</button></div>' : ''}
     <div class="card-tools"><button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
       ${state.later.some(x => x.id === card.id) ? '<button class="textlink" data-act="peekUnlater">Убрать из отложенного</button>' : ''}</div>
