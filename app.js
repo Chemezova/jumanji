@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 74;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 75;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -234,6 +234,10 @@ function jokerWish() {
   const v = ui.jokerNote;
   return v && v.trim() ? { note: v.trim() } : undefined;
 }
+// к обычной вытянутой карте старая фантазия не прилипает
+function wishFor(card) {
+  return card.joker || state.drawn.from === 'joker' || state.drawn.from === 'later' ? jokerWish() : undefined;
+}
 
 function log(id, r, extra) {
   state.log.push(Object.assign({ ts: now(), id, L: state.leader, r }, extra || {}));
@@ -416,7 +420,7 @@ function waitPlaying() {
 }
 
 function waitDecision() {
-  toast('Сначала решите, что делать с вытянутой картой: «Играем», «Потом» или «Никогда»');
+  toast('Сначала решите, что делать с вытянутой картой: «Играем», «Отложить» или «Не сейчас»');
   ui.screen = 'card';
   window.scrollTo(0, 0);
 }
@@ -489,7 +493,7 @@ function giveGift(to, note) {
 function fromLater(id) {
   const x = state.later.find(x => x.id === id) || {};
   ui.jokerNote = x.note || '';
-  return { id, from: 'later', top: x.top };
+  return { id, from: 'later', top: x.top, tone: x.tone };
 }
 
 // Взяли карту в игру (или в планы): за ход — одна карта каждого типа; рейтинг растёт
@@ -642,6 +646,7 @@ const actions = {
   openPlanned(d) {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
+    if (state.playing && !inGift()) return waitPlaying();
     if (!state.leader) return toast('Сначала выберите ведущего');
     state.drawn = fromLater(d.id); save();
     ui.screen = 'card'; window.scrollTo(0, 0);
@@ -668,13 +673,14 @@ const actions = {
     }
     const card = byId(state.drawn.id);
     const top = state.drawn.top || topFor(card, state.leader);
-    const wish = jokerWish();
+    const wish = wishFor(card);
+    const tone = state.drawn.tone;
     removeLater(card.id);
-    state.later.push(Object.assign({ id: card.id, ts: now(), plan: true, day: d.day }, state.drawn.top ? { top } : {}, wish));
+    state.later.push(Object.assign({ id: card.id, ts: now(), plan: true, day: d.day }, state.drawn.top ? { top } : {}, tone ? { tone } : {}, wish));
     const needs = missingNeeds(card).map(n => n.split('|')[0]);
     const toBuy = needs.concat((card.buy || []).filter(id => !hasToy(id)));
     toBuy.forEach(id => { if (!state.shop.includes(id)) state.shop.push(id); });
-    log(card.id, 'plan', Object.assign({ L: top }, state.drawn.from === 'joker' ? { via: 'joker' } : {}, wish));
+    log(card.id, 'plan', Object.assign({ L: top }, state.drawn.from === 'joker' ? { via: 'joker' } : {}, tone ? { tone } : {}, wish));
     markPlayed(card);
     state.turnPlays++;
     ui.screen = 'dash'; state.drawn = null; ui.jokerNote = '';
@@ -692,7 +698,7 @@ const actions = {
     ensureGame();
     const top = state.drawn.top || topFor(card, state.leader);
     const tone = state.drawn.tone;
-    log(card.id, 'play', Object.assign({ L: top }, state.drawn.from === 'joker' ? { via: 'joker' } : {}, tone ? { tone } : {}, jokerWish()));
+    log(card.id, 'play', Object.assign({ L: top }, state.drawn.from === 'joker' ? { via: 'joker' } : {}, tone ? { tone } : {}, wishFor(card)));
     if (state.newToy && usesToy(card, state.newToy)) state.newToy = null;   // новинку обыграли
     markPlayed(card);
     state.turnPlays++;
@@ -738,7 +744,7 @@ const actions = {
     if (mode === 'jokerPlan') {   // джокер: выбранная карта — на выбранный день
       const ch = ui.jokerChoice;
       ui.jokerPick = null; ui.jokerChoice = null;
-      state.drawn = { id: ch.id, from: 'joker', top: ch.top };
+      state.drawn = { id: ch.id, from: 'joker', top: ch.top, tone: ch.tone };
       return actions.plan({ day });
     }
     return mode === 'plan' ? actions.plan({ day }) : actions.later({ day });
@@ -747,7 +753,7 @@ const actions = {
     const card = byId(state.drawn.id);
     const wasPlan = state.later.find(x => x.id === card.id)?.plan;
     removeLater(card.id);
-    state.later.push({ id: card.id, ts: now(), plan: wasPlan || state.when === 'next', day: d && d.day });
+    state.later.push(Object.assign({ id: card.id, ts: now(), plan: wasPlan || state.when === 'next', day: d && d.day }, state.drawn.tone ? { tone: state.drawn.tone } : {}));
     log(card.id, 'later');
     const st = stat(card.id);
     if (!card.joker) st.l++;   // джокер «Потом» не понижает и в «Никогда» сам не уходит
@@ -798,15 +804,16 @@ const actions = {
   // выбрал карту — она целиком: версия (кто ведёт), сейчас или на день
   jokerChoose(d) {
     const c = byId(d.id);
-    ui.jokerChoice = { id: c.id, top: jokerTop(c, state.leader) };
+    ui.jokerChoice = { id: c.id, top: jokerTop(c, state.leader), tone: toneFor(c) };
     window.scrollTo(0, 0);
   },
   jokerVer(d) { ui.jokerChoice.top = d.l; },
+  jokerTone(d) { ui.jokerChoice.tone = d.t; },
   jokerList() { ui.jokerChoice = null; },
   jokerPlay() {
     const ch = ui.jokerChoice;
     ui.jokerPick = null; ui.jokerChoice = null;
-    state.drawn = { id: ch.id, from: 'joker', top: ch.top };
+    state.drawn = { id: ch.id, from: 'joker', top: ch.top, tone: ch.tone };
     return actions.play({ now: true });
   },
   jokerDay() { ui.modal = { type: 'schedule', mode: 'jokerPlan', day: '' }; },
@@ -903,6 +910,7 @@ const actions = {
     const sc = state.scenario;
     if (sc) state.log.push({ ts: now(), id: sc.id, L: sc.leader, r: 'stop', dur: now() - sc.start });
     state.playing = null; state.game = null; state.scenario = null;
+    state.drawn = null; ui.jokerNote = ''; ui.jokerPick = null; ui.jokerChoice = null;
     let t;   // закончили — ход сделан; в подарок сгорает только комбо на сегодня
     if (inGift()) { state.forced.comboDone = true; t = giftCheck(); } else { endTurn(); t = nextText(); }
     save();
@@ -1007,13 +1015,18 @@ const actions = {
     state.scenario = null; ui.peek = null; save();
     toast('Сценарий сыгран');
   },
-  endGame() { ui.modal = { type: 'endGame' }; },
+  endGame() {
+    if (state.drawn) return waitDecision();
+    ui.modal = { type: 'endGame' };
+  },
   endGameYes() {
+    const wasPlaying = !!state.playing;
     closePlaying();
     const sc = state.scenario;
     if (sc) state.log.push({ ts: now(), id: sc.id, L: sc.leader, r: 'done', dur: now() - sc.start });
     state.game = null; state.scenario = null; ui.skipLater = {};
     if (inGift()) { state.forced.comboDone = true; giftCheck(); }   // комбо подарка — на сегодня, назначения остаются
+    else if (wasPlaying) endTurn();
     else resetTurn();
     if (state.pickMode === 'random' && !state.forced) state.leader = null;
     save(); ui.modal = null;
@@ -1301,7 +1314,7 @@ function dashView() {
     const c = byId(sc.id);
     h += `<button class="deck active" data-act="viewScenario">
       <div class="sym">${TYPE.scenario.sym}</div>
-      <div class="tx"><div class="t">${esc(cardFor(c, sc.leader).title)}</div>
+      <div class="tx"><div class="t">${esc(scenarioTitle())}</div>
       <div class="d">Сценарий идёт · ведёт ${NAME[sc.leader]}</div></div>
       <div class="cnt" data-since="${sc.start}">${clock(now() - sc.start)}</div>
     </button>
@@ -1360,6 +1373,13 @@ function playedChips(type) {
   }).join('')}</div>`;
 }
 
+// Название идущего сценария: с его тоном, у джокера — с загаданной фантазией
+function scenarioTitle() {
+  const sc = state.scenario;
+  const e = state.log.filter(e => e.id === sc.id && e.r === 'play' && e.ts >= sc.start - 1000).pop();
+  return e ? playedTitle(e, byId(sc.id)) : cardFor(byId(sc.id), sc.leader, sc.tone).title;
+}
+
 // Подсказки идущего сценария — первыми в блоках «Позы» и «Действия»: нажми — карта откроется, решение как обычно
 function relChips(type) {
   if (state.when === 'next' || !state.scenario) return '';
@@ -1367,7 +1387,7 @@ function relChips(type) {
   const played = new Set(state.log.filter(e => e.ts >= state.scenario.start && e.r === 'play').map(e => e.id));
   const list = relatedFor(sc, state.scenario.leader).filter(c => c.type === type && !played.has(c.id)).slice(0, REL_SHOW);
   if (!list.length) return '';
-  return `<div class="cloud-h">К сценарию «${esc(cardFor(sc, state.scenario.leader).title)}»</div><div class="links cloud">${list.map(c =>
+  return `<div class="cloud-h">К сценарию «${esc(scenarioTitle())}»</div><div class="links cloud">${list.map(c =>
     `<button class="chip" data-act="relOpen" data-id="${c.id}">${esc(cardFor(c, topFor(c, state.leader)).title)}</button>`).join('')}</div>`;
 }
 
@@ -1459,11 +1479,12 @@ function cardScreen() {
   const rel = card.type === 'scenario' && state.when === 'now' ? relatedFor(card) : [];
   if (rel.length) h += `<div class="sec">К этому сценарию подойдёт</div><div class="links">${rel.slice(0, 12).map(c => `<span class="chip">${TYPE[c.type].sym} ${esc(cardFor(c, topFor(c, L)).title)}</span>`).join('')}</div>
     <p class="meta" style="margin:4px 0 0">После «Играем» сценарий пойдёт на главной, а эти позы и действия встанут первыми в блоки «Позы» и «Действия».</p>`;
-  if (card.gift) return h + `<div class="card-actions"><button class="btn gold" style="grid-column:1/-1" data-act="giftTurn">🎁 Отдать ход — ведёт ${NAME[other(L)]}</button></div>`;
+  if (card.gift) return h + `<div class="card-actions"><button class="btn gold" style="grid-column:1/-1" data-act="giftTurn">🎁 Отдать ход с подарком — ведёт ${NAME[other(L)]}</button></div>`;
   h += card.switch
     ? `<div class="card-actions">
     <button class="btn primary" data-act="play">Принимаю — я ${L === 'F' ? 'нижняя' : 'нижний'}</button>
     <button class="btn" style="grid-column:1/-1" data-act="refuseSwitch">Отказываюсь — красная карточка</button>
+    ${state.drawn.from === 'rel' ? '<button class="btn ghost" style="grid-column:1/-1" data-act="relBack">‹ Назад к подсказкам</button>' : ''}
   </div>`
     : `<div class="card-actions">
     <button class="btn primary" data-act="play">${state.when === 'next' ? 'Играем — назначить день' : 'Играем'}</button>
@@ -1833,7 +1854,8 @@ function jokerChoiceView() {
   let h = `<button class="back" data-act="jokerList">‹ К списку</button><div style="height:8px"></div>`;
   if (tops.length === 2 && (c.M || c.F)) h += `<div class="seg">${tops.map(x => `<button class="${ch.top === x ? 'on' : ''}" data-act="jokerVer" data-l="${x}">Ведёт ${NAME[x]}</button>`).join('')}</div>`;
   if (ch.top !== topFor(c, L)) h += `<div class="note switch">Реверс: эту карту ведёт ${NAME[ch.top]}, а ${NAME[L]} — ${L === 'F' ? 'нижняя' : 'нижний'}.</div>`;
-  h += cardHtml(c, ch.top);
+  h += toneSeg(c, ch.tone, 'jokerTone');
+  h += cardHtml(c, ch.top, ch.tone);
   h += `<div class="card-actions">
     ${miss.length ? `<p class="meta" style="grid-column:1/-1">Сейчас не сыграть — нет: ${esc(miss.map(n => n.split('|').map(toyName).join(' или ')).join(', '))}</p>` : '<button class="btn primary" data-act="jokerPlay">▶ Играем сейчас</button>'}
     <button class="btn" ${miss.length ? 'style="grid-column:1/-1"' : ''} data-act="jokerDay">Назначить день…</button>
