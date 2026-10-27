@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 75;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 76;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -13,6 +13,7 @@ const JOKER_WEIGHT = 3;            // джокер выпадает чаще о�
 const RARE_WEIGHT = 0.1;
 const SPICE_WEIGHT = 2.5;
 const AUTHOR_WEIGHT = 2;           // карты, придуманные и расписанные Еленой, — чаще обычных
+const TONES_WEIGHT = 2;            // карты с тремя тонами (нежно / игриво / жёстко) — чаще обычных
 const AUTHOR_IDS = new Set([
   'sc-escort', 'sc-scientist', 'sc-no-hands-massage', 'sc-dirty', 'ac-read-erotica', 'ac-wide-touch',
   'ac-inner-training', 'ac-golden', 'ac-yoni', 'ac-gag', 'bo-hands', 'bo-legs', 'bo-frog', 'bo-wrists-ankles',
@@ -329,6 +330,7 @@ function cardWeight(c) {
   if (st.l) w *= Math.pow(0.8, st.l);
   if (c.rare && state.when === 'now') w *= RARE_WEIGHT;
   if (AUTHOR_IDS.has(c.id) || c.gift) w *= AUTHOR_WEIGHT;   // «Ход в подарок» — как карты Елены
+  if (c.tones) w *= TONES_WEIGHT;
   // выбранная острота выпадает чаще, сильно мягче неё — реже
   const gap = c.gift ? 1 : state.lvlMax - (c.lvl || 1);   // у «Хода в подарок» остроты нет — ни бонуса, ни штрафа
   if (gap === 0) w *= SPICE_WEIGHT;
@@ -340,7 +342,7 @@ function cardWeight(c) {
 // Карта без рейтинга — нейтральная: такие идут по очереди, пока не выпадут все
 function isNeutral(c) {
   const st = (state.stats || {})[c.id];
-  return !state.fav[c.id] && !(st && (st.p || st.l)) && !c.rare && !c.joker && !c.gift && !(state.newToy && usesToy(c, state.newToy));
+  return !state.fav[c.id] && !(st && (st.p || st.l)) && !c.rare && !c.joker && !c.gift && !c.tones && !(state.newToy && usesToy(c, state.newToy));
 }
 
 function pickRandom(type) {
