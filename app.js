@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 76;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 77;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -205,12 +205,13 @@ function cardFor(card, L, tone) {
   const tn = tone && card.tones && card.tones[tone] ? Object.assign({}, card.tones[tone], card.tones[tone][L] || {}) : {};
   return {
     title: tn.title || own.title || card.title,
-    teaser: tn.teaser || card.teaser || '',
+    teaser: tn.teaser || own.teaser || card.teaser || '',
     intro: tn.intro || own.intro || card.intro || '',
     steps: (card.steps || []).concat(tn.steps || own.steps || []),
     tips: (card.tips || []).concat(own.tips || [], tn.tips || []),
     tell: tn.tell || own.tell || card.tell || '',
     order: tn.order || own.order || card.order || '',
+    say: (card.say && card.say[L]) || [],
     uses: own.uses || card.uses || [],
   };
 }
@@ -1437,6 +1438,7 @@ function cardHtml(card, L, tone) {
     <div class="card-body">`;
   if (t.intro) h += `<p>${esc(t.intro)}</p>`;
   if (t.order) h += `<div class="box order"><b>Приказ — прочитай вслух</b>${esc(t.order)}</div>`;
+  if (t.say.length) h += `<div class="box say"><b>${L === 'M' ? 'Её' : 'Его'} слова — скажи «Проси», пусть повторит одну, глядя в глаза</b>${t.say.map(s => `<p>«${esc(s)}»</p>`).join('')}<small>Тихо, со смешком или не глядя — ещё раз.</small></div>`;
   if ((card.lvl || 1) >= 3) h += `<div class="stopword">Стоп-слово: ${state.stopWord ? `<b>«${esc(state.stopWord)}»</b>` : '<button class="textlink" data-act="go" data-s="settings">не задано — задать</button>'} — останавливает всё сразу</div>`;
   const toys = (card.needs || []).map(n => {
     const ok = !miss.includes(n);
