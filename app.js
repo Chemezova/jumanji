@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 77;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 78;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -20,7 +20,7 @@ const AUTHOR_IDS = new Set([
   'bd-positions', 'tp-cat', 'tp-doll', 'tp-ready', 'tp-collar', 'tp-prisoner', 'tp-under', 'bd-sheer',
   'bd-torn-tights', 'bd-mini', 'bd-coat', 'bd-heels', 'bd-his-outfit', 'bd-deep-throat', 'bd-titfuck', 'bd-facesit',
   'bd-lower', 'bd-plug',
-  'sc-teacher', 'ac-double', 'ac-all-at-once', 'ac-a-spot', 'ac-nipples', 'sc-bondage-photo', 'sc-kept', 'buy-any',
+  'sc-teacher', 'ac-double', 'ac-all-at-once', 'ac-nipples', 'sc-bondage-photo', 'sc-kept', 'buy-any',
 ]);          // карты выбранной в Настройках остроты — чаще остальных           // «слишком игровые» сценарии в режиме «Сейчас»
 const POSES_PER_TURN = 3;          // поз за ход — несколько, сценарий и действие — по одному
 const PREP_DAYS = 7;               // за сколько дней назначенное попадает в «Рекомендую приготовиться»
@@ -111,6 +111,7 @@ const MERGED = {
   // отдельные покупки убраны — хватает общей карты
   'buy-douche': 'buy-any', 'ac-buy-suction': 'buy-any', 'ac-buy-wand': 'buy-any', 'ac-buy-underbed': 'buy-any',
   'ac-buy-glass': 'buy-any', 'buy-shackles': 'buy-any', 'buy-bdsm-kit': 'buy-any',
+  'ac-a-spot': 'ac-inner-training',   // точка A — развилка карты «Вагинальный оргазм»
 };
 let state = load();
 // перенести отметки со слитых карт на оставшиеся
@@ -216,15 +217,24 @@ function cardFor(card, L, tone) {
   };
 }
 // Тон по умолчанию — по остроте из Настроек
+// У карты с развилками (toneNames) вместо тонов — свои названия, по умолчанию — основная версия (mid)
 function toneFor(card) {
   if (!card.tones) return undefined;
+  if (card.toneNames) return 'mid';
   return state.lvlMax <= 1 ? 'soft' : state.lvlMax === 2 ? 'mid' : 'hard';
 }
+const toneLabel = (card, t) => (card.toneNames || TONES)[t];
+// Развилки открываются, когда основную версию сыграли toneAfter раз
+const toneOpen = (card, t) => t === 'mid' || !card.toneAfter || (((state.stats || {})[card.id] || {}).p || 0) >= card.toneAfter;
 // Переключатель тона над картой
 function toneSeg(card, cur, act) {
   if (!card.tones) return '';
-  return `<div class="seg tone-seg">${Object.keys(TONES).filter(t => t === 'mid' || card.tones[t]).map(t =>
-    `<button class="${cur === t ? 'on' : ''}" data-act="${act}" data-t="${t}">${TONES[t]}</button>`).join('')}</div>`;
+  const all = Object.keys(card.toneNames || TONES).filter(t => t === 'mid' || card.tones[t]);
+  const open = all.filter(t => toneOpen(card, t));
+  const locked = all.filter(t => !toneOpen(card, t)).map(t => toneLabel(card, t));
+  return `<div class="seg tone-seg">${open.map(t =>
+    `<button class="${cur === t ? 'on' : ''}" data-act="${act}" data-t="${t}">${toneLabel(card, t)}</button>`).join('')}</div>` +
+    (locked.length ? `<div class="note soft">${esc(locked.join(' и '))} — откроются, когда сыграете «${esc(toneLabel(card, 'mid'))}» ${card.toneAfter} раза</div>` : '');
 }
 
 // Кто ведёт карту. Мазо-карта (switch) переворачивает роли: ведущий становится нижним,
@@ -1364,7 +1374,7 @@ function playedOf(type) {
 // Как подписать сыгранную карту: джокер — с загаданной фантазией, карта по джокеру — со звёздочкой
 function playedTitle(e, c) {
   if (c.joker) return e.note ? `★ Джокер: ${e.note}` : '★ Джокер';
-  return (e.via === 'joker' ? '★ ' : '') + cardFor(c, e.L || 'M', e.tone).title + (e.tone && e.tone !== 'mid' ? ` · ${TONES[e.tone].toLowerCase()}` : '');
+  return (e.via === 'joker' ? '★ ' : '') + cardFor(c, e.L || 'M', e.tone).title + (e.tone && e.tone !== 'mid' && !c.toneNames ? ` · ${TONES[e.tone].toLowerCase()}` : '');
 }
 
 function playedChips(type) {
@@ -1579,7 +1589,7 @@ function peekView() {
   const tone = inPlay ? inPlay.tone : ui.peekTone || toneFor(card);
   return `<div class="peek"><div class="inner">
     <button class="back" data-act="peekClose">‹ Закрыть</button>
-    ${inPlay ? (tone ? `<div class="note soft" style="margin-top:40px">Тон: ${TONES[tone]}</div>` : '') : toneSeg(card, tone, 'peekTone')}
+    ${inPlay ? (tone ? `<div class="note soft" style="margin-top:40px">${card.toneNames ? '' : 'Тон: '}${toneLabel(card, tone)}</div>` : '') : toneSeg(card, tone, 'peekTone')}
     ${cardHtml(card, L, tone)}
     ${state.scenario && state.scenario.id === card.id ? '<div class="who-row"><button class="btn small" data-act="scenarioDone">Сценарий сыгран</button></div>' : ''}
     <div class="card-tools"><button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
