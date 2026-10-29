@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 79;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 80;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -468,9 +468,13 @@ function endTurn() {
     if (state.forced.left > 0) { state.leader = state.forced.who; return; }
   }
   state.forced = null;
-  if (state.pickMode === 'turns' && state.leader) state.leader = other(state.leader);
+  // пока идёт сценарий, ходы чередуются при любом режиме — стрелку не крутят
+  if ((state.pickMode === 'turns' || state.scenario) && state.leader) state.leader = other(state.leader);
   else state.leader = null;
 }
+// Сценарий идёт и ведущий есть: ход сам переходит по очереди, менять ведущего нельзя
+const scenarioTurns = () => !!(state.scenario && state.leader);
+function waitScenario() { toast('Пока идёт сценарий, ходы чередуются сами. Стрелка — после «Сценарий сыгран»'); }
 
 // Обычный ход — одна карта: сыграли, назначили или отложили — ход переходит сам.
 // В подарок ход остаётся у получателя, пока он не выберет всё или не закончит подарок.
@@ -562,6 +566,7 @@ const actions = {
     if (state.playing) return waitPlaying();
     if (state.turnPlays) return toast('Ход ещё идёт');
     if (state.forced) return toast(`Ход у ${state.forced.who === 'M' ? 'него' : 'неё'}: ${fixedWhy(state.forced)}`);
+    if (scenarioTurns()) return waitScenario();
     state.leader = d.l; save();
   },
   pickMode(d) { state.pickMode = d.m; save(); },
@@ -572,6 +577,7 @@ const actions = {
     if (state.playing) return waitPlaying();
     if (state.turnPlays) return toast('Ход ещё идёт');
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
+    if (scenarioTurns()) return waitScenario();
     ui.modal = { type: 'spin', result: null };
   },
   spinGo() {
@@ -1237,19 +1243,79 @@ function topBar() {
   </div>`;
 }
 
+// Ближайшая неделя — «Рекомендую приготовиться»: что впереди и что докупить. На главной — внизу
+function prepBlock() {
+  const L = state.leader;
+  let h = '';
+  const week = new Date(); week.setDate(week.getDate() + PREP_DAYS);
+  const soon = state.later.filter(x => x.day && x.day > today() && x.day <= isoDay(week) && byId(x.id))
+    .sort((a, b) => a.day.localeCompare(b.day));
+  if (soon.length) h += `<div class="prep" style="margin-top:16px"><div class="sec" style="margin-top:0">Рекомендую приготовиться</div><ul class="list">${soon.map(x => {
+    const c = byId(x.id);
+    const need = missingNeeds(c).map(n => n.split('|').map(toyName).join(' или ')).concat((c.buy || []).filter(id => !hasToy(id)).map(toyName));
+    return `<li><span>${TYPE[c.type].sym}</span><button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(cardFor(c, L || 'M').title)}
+      <div class="meta">${dayLabel(x.day)} · ${peppers(c.lvl)}${need.length ? ` · нужно: ${esc(need.join(', '))}` : ''}</div></button>
+      <button class="x" data-act="moveLater" data-id="${c.id}">перенести</button></li>`;
+  }).join('')}</ul></div>`;
+
+  return h;
+}
+
 function dashView() {
   const L = state.leader;
   const f = state.forced;
-  const player = l => `<button class="player ${l} ${L === l ? 'on' : ''}" data-act="pickLeader" data-l="${l}" ${f && f.who !== l ? 'disabled' : ''} ${state.drawn || state.playing || state.penaltyDue || state.turnPlays ? 'data-why="1"' : ''}>
+  const player = l => `<button class="player ${l} ${L === l ? 'on' : ''}" data-act="pickLeader" data-l="${l}" ${f && f.who !== l ? 'disabled' : ''} ${state.drawn || state.playing || state.penaltyDue || state.turnPlays || scenarioTurns() ? 'data-why="1"' : ''}>
       <div class="nm">${NAME[l]}</div>
       <div class="st">${L === l ? 'ведёт' : 'подчиняется'}</div>
       ${f && f.gift && f.who === l ? '<div class="gift-badge">🎁</div>' : ''}
     </button>`;
 
   let h = topBar();
+  // Сначала — то, что идёт прямо сейчас: наказание, карта в игре, вытянутая карта, сценарий, план на сегодня
+  if (state.penaltyDue) {
+    const p = state.penaltyDue;
+    h += `<div class="note penalty-due">
+      <div class="pd-head">🟥 ${NAME[p.who]} ${p.who === 'F' ? 'наказана' : 'наказан'}: <b>${esc(p.title)}</b></div>
+      <div class="pd-text">${esc(p.text)}</div>
+      <div class="pd-meta">Назначено ${dayName(p.ts).toLowerCase()} в ${hm(p.ts)}. Пока не выполнено — игра стоит.</div>
+      <button class="btn primary" data-act="penaltyDone">Выполнено</button>
+    </div>`;
+  }
+  if (state.playing) {
+    const c = byId(state.playing.id);
+    h += `<button class="deck active" data-act="openPlaying" style="margin-bottom:12px">
+      <div class="sym">⏱</div>
+      <div class="tx"><div class="t">Карта в игре</div><div class="d">${TYPE[c.type].one} · ведёт ${NAME[state.playing.leader]} · вернуться</div></div>
+      <div class="cnt" data-since="${state.playing.start}">${clock(now() - state.playing.start)}</div>
+    </button>`;
+  }
+  if (state.drawn) {
+    const c = byId(state.drawn.id);
+    h += `<button class="deck active" data-act="openDrawn" style="margin-bottom:12px">
+      <div class="sym">${TYPE[c.type].sym}</div>
+      <div class="tx"><div class="t">Карта ждёт решения</div><div class="d">${TYPE[c.type].one} · вернуться к карте</div></div>
+    </button>`;
+  }
+  const sc = state.scenario;
+  if (sc) {
+    h += `<button class="deck active" data-act="viewScenario" style="margin-bottom:6px">
+      <div class="sym">${TYPE.scenario.sym}</div>
+      <div class="tx"><div class="t">${esc(scenarioTitle())}</div>
+      <div class="d">Сценарий идёт · ведёт ${NAME[sc.leader]}</div></div>
+      <div class="cnt" data-since="${sc.start}">${clock(now() - sc.start)}</div>
+    </button>
+    <div class="who-row" style="margin:0 0 12px"><button class="btn ghost small" data-act="scenarioDone">Сценарий сыгран</button></div>`;
+  }
+  // План на сегодня; не сыгранное в свой день — отдельно, с датой и «перенести»
+  const todays = state.later.filter(x => x.day === today() && byId(x.id));
+  const overdue = state.later.filter(x => x.day && x.day < today() && byId(x.id));
+  const planLink = x => `<button class="textlink" style="padding:0" data-act="openPlanned" data-id="${x.id}">${esc(cardFor(byId(x.id), L || 'M').title)}</button>`;
+  if (todays.length) h += `<div class="note gift">📅 По плану на сегодня: ${todays.map(planLink).join(', ')}</div>`;
+  if (overdue.length) h += `<div class="note">⏰ Не сыграли в назначенный день: ${overdue.map(x => `${planLink(x)} (${dayLabel(x.day)}, <button class="textlink" style="padding:0" data-act="moveLater" data-id="${x.id}">перенести</button>)`).join(', ')}</div>`;
+
   h += `<div class="players">${player('M')}${player('F')}</div>`;
   h += `<div class="who-row">
-      <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''} ${state.drawn || state.playing || state.penaltyDue || state.turnPlays ? 'data-why="1"' : ''}>➶ Кто сегодня главный?</button>
+      <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''} ${state.drawn || state.playing || state.penaltyDue || state.turnPlays || scenarioTurns() ? 'data-why="1"' : ''}>➶ Кто сегодня главный?</button>
     </div>`;
   h += `<div class="seg">
       <button class="${state.pickMode === 'random' ? 'on' : ''}" data-act="pickMode" data-m="random">Стрелка</button>
@@ -1266,53 +1332,9 @@ function dashView() {
       <button class="${state.when === 'next' ? 'on' : ''}" data-act="when" data-w="next">На следующий раз</button>
     </div>`;
 
-  // Что назначено на сегодня (или просрочено) — отдельной строкой наверху
-  const todays = state.later.filter(x => x.day && x.day <= today() && byId(x.id));
-  if (todays.length) h += `<div class="note gift">📅 По плану на сегодня: ${todays.map(x => `<button class="textlink" style="padding:0" data-act="openPlanned" data-id="${x.id}">${esc(cardFor(byId(x.id), L || 'M').title)}</button>`).join(', ')}</div>`;
-
-  // Ближайшая неделя — «Рекомендую приготовиться»: что впереди и что докупить
-  const week = new Date(); week.setDate(week.getDate() + PREP_DAYS);
-  const soon = state.later.filter(x => x.day && x.day > today() && x.day <= isoDay(week) && byId(x.id))
-    .sort((a, b) => a.day.localeCompare(b.day));
-  if (soon.length) h += `<div class="prep"><div class="sec" style="margin-top:0">Рекомендую приготовиться</div><ul class="list">${soon.map(x => {
-    const c = byId(x.id);
-    const need = missingNeeds(c).map(n => n.split('|').map(toyName).join(' или ')).concat((c.buy || []).filter(id => !hasToy(id)).map(toyName));
-    return `<li><span>${TYPE[c.type].sym}</span><button class="grow" style="text-align:left" data-act="view" data-id="${c.id}">${esc(cardFor(c, L || 'M').title)}
-      <div class="meta">${dayLabel(x.day)} · ${peppers(c.lvl)}${need.length ? ` · нужно: ${esc(need.join(', '))}` : ''}</div></button>
-      <button class="x" data-act="moveLater" data-id="${c.id}">перенести</button></li>`;
-  }).join('')}</ul></div>`;
-
-  // Невыполненное наказание держит игру
-  if (state.penaltyDue) {
-    const p = state.penaltyDue;
-    h += `<div class="note penalty-due">
-      <div class="pd-head">🟥 ${NAME[p.who]} ${p.who === 'F' ? 'наказана' : 'наказан'}: <b>${esc(p.title)}</b></div>
-      <div class="pd-text">${esc(p.text)}</div>
-      <div class="pd-meta">Назначено ${dayName(p.ts).toLowerCase()} в ${hm(p.ts)}. Пока не выполнено — игра стоит.</div>
-      <button class="btn primary" data-act="penaltyDone">Выполнено</button>
-    </div>`;
-  }
-
-  // Незаконченное: карта в игре или вытянутая без решения
-  if (state.playing) {
-    const c = byId(state.playing.id);
-    h += `<button class="deck active" data-act="openPlaying" style="margin-top:12px">
-      <div class="sym">⏱</div>
-      <div class="tx"><div class="t">Карта в игре</div><div class="d">${TYPE[c.type].one} · ведёт ${NAME[state.playing.leader]} · вернуться</div></div>
-      <div class="cnt" data-since="${state.playing.start}">${clock(now() - state.playing.start)}</div>
-    </button>`;
-  }
-  if (state.drawn) {
-    const c = byId(state.drawn.id);
-    h += `<button class="deck active" data-act="openDrawn" style="margin-top:12px">
-      <div class="sym">${TYPE[c.type].sym}</div>
-      <div class="tx"><div class="t">Карта ждёт решения</div><div class="d">${TYPE[c.type].one} · вернуться к карте</div></div>
-    </button>`;
-  }
-
   if (!L) {
     h += `<div class="note soft">Выберите ведущего — нажмите «ОН» или «ОНА» или доверьтесь стрелке.</div>`;
-    return h;
+    return h + prepBlock();
   }
 
   h += `<div class="zone-title"><h2>Ведёт <span class="lead-${L}">${NAME[L]}</span></h2>
@@ -1322,20 +1344,9 @@ function dashView() {
       : 'За ход — одна карта: сыграли, назначили или отложили — и ход переходит.'}</p>`;
 
   // Сценарий
-  const sc = state.when === 'next' ? null : state.scenario;   // в планы сценарий тянется, даже когда сегодняшний идёт
   const u = usedNow();
-  if (sc) {
-    const c = byId(sc.id);
-    h += `<button class="deck active" data-act="viewScenario">
-      <div class="sym">${TYPE.scenario.sym}</div>
-      <div class="tx"><div class="t">${esc(scenarioTitle())}</div>
-      <div class="d">Сценарий идёт · ведёт ${NAME[sc.leader]}</div></div>
-      <div class="cnt" data-since="${sc.start}">${clock(now() - sc.start)}</div>
-    </button>
-    <div class="who-row" style="margin-top:6px"><button class="btn ghost small" data-act="scenarioDone">Сценарий сыгран</button></div>`;
-  } else {
-    h += deckBtn('scenario', u.scenario ? '✓ в ходе' : '');
-  }
+  // идущий сценарий — наверху; в планы сценарий тянется, даже когда сегодняшний идёт
+  if (!sc || state.when === 'next') h += deckBtn('scenario', u.scenario ? '✓ в ходе' : '');
   h += deckBtn('pose', u.pose ? `${u.pose} / ${POSES_PER_TURN}` : '') + relChips('pose') + playedChips('pose');
   h += deckBtn('action', u.action ? '✓ в ходе' : '') + relChips('action') + playedChips('action');
   if (!state.turnPlays && !f) h += `<div class="who-row"><button class="btn ghost small" data-act="skip">Пропустить ход (штраф)</button></div>`;
@@ -1349,6 +1360,8 @@ function dashView() {
     }).join('');
     h += `</div>`;
   }
+
+  h += prepBlock();
 
   // Сыграно в этой игре
   if (state.game) {
