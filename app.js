@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 78;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 79;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -112,6 +112,7 @@ const MERGED = {
   'buy-douche': 'buy-any', 'ac-buy-suction': 'buy-any', 'ac-buy-wand': 'buy-any', 'ac-buy-underbed': 'buy-any',
   'ac-buy-glass': 'buy-any', 'buy-shackles': 'buy-any', 'buy-bdsm-kit': 'buy-any',
   'ac-a-spot': 'ac-inner-training',   // точка A — развилка карты «Вагинальный оргазм»
+  'po-open-spoons': 'po-spoons',      // открытые — развилка «Ложечек»
 };
 let state = load();
 // перенести отметки со слитых карт на оставшиеся
@@ -341,7 +342,7 @@ function cardWeight(c) {
   if (st.l) w *= Math.pow(0.8, st.l);
   if (c.rare && state.when === 'now') w *= RARE_WEIGHT;
   if (AUTHOR_IDS.has(c.id) || c.gift) w *= AUTHOR_WEIGHT;   // «Ход в подарок» — как карты Елены
-  if (c.tones) w *= TONES_WEIGHT;
+  if (c.tones && !c.toneNames) w *= TONES_WEIGHT;   // развилки — не тоны: чаще не выпадают
   // выбранная острота выпадает чаще, сильно мягче неё — реже
   const gap = c.gift ? 1 : state.lvlMax - (c.lvl || 1);   // у «Хода в подарок» остроты нет — ни бонуса, ни штрафа
   if (gap === 0) w *= SPICE_WEIGHT;
