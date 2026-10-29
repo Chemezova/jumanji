@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 82;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 83;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -99,8 +99,15 @@ function load() {
   return emptyState();
 }
 
+// Не сохранилось (кончилось место) — сказать человеку, а не терять молча. Раз за запуск
+let saveWarned = false;
 function save() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+  catch (e) {
+    if (saveWarned || !document.body) return;
+    saveWarned = true;
+    setTimeout(() => toast('Не получилось сохранить: на телефоне кончилось место. Освободите память и сделайте резервную копию в Настройках'), 0);
+  }
 }
 
 // Дубли, слитые в одну карту: старый id → оставшаяся карта (журнал, избранное и т. п.)
@@ -2262,6 +2269,11 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden && state.pin) { ui.locked = true; ui.pinEntry = ''; ui.peek = null; render(); }
   if (!document.hidden && state.playing) wakeLock();
 });
+
+// Постоянное хранилище: без него браузер может сам стереть данные сайта, если им долго не пользоваться
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});
+}
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').then(reg => {
