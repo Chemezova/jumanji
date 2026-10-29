@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 83;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 84;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -864,12 +864,13 @@ const actions = {
     toast(`Джокер отдан. Ход переходит: ведёт ${NAME[other(was)]} — обычный ход`);
   },
   jokerBack() { ui.jokerPick = null; ui.jokerChoice = null; ui.screen = 'card'; },
-  // отказ стать нижним по мазо-карте: карта не пропадает, ведущему — красная карточка
+  // отказ стать нижним по мазо-карте: карта не пропадает, ведущему — красная карточка, ход — партнёру (как пропуск)
   refuseSwitch() {
     const L = state.leader;
     log(state.drawn.id, 'refuse');
-    ui.screen = 'dash'; state.drawn = null; save();
-    ui.modal = { type: 'punish', who: L, reason: 'отказ стать нижним' };
+    ui.screen = 'dash'; state.drawn = null;
+    passTurn(L, 'отказ стать нижним');
+    save();
   },
   neverYes() {
     const card = byId(state.drawn.id);
@@ -1498,7 +1499,7 @@ function cardScreen() {
   const card = byId(state.drawn.id);
   const L = state.leader;
   let h = `<button class="home-btn" data-act="home">‹ Главная</button><button class="stop-btn" data-act="stop">Стоп</button>`;
-  if (card.switch) h += `<div class="note switch" style="margin:40px 0 12px">⇅ Мазо-карта. В этот раз ${NAME[L]} — ${L === 'F' ? 'нижняя' : 'нижний'}: карту исполняет ${NAME[other(L)]}. Принимаешь — отдай телефон. Отказ — красная карточка.</div>`;
+  if (card.switch) h += `<div class="note switch" style="margin:40px 0 12px">⇅ Мазо-карта. В этот раз ${NAME[L]} — ${L === 'F' ? 'нижняя' : 'нижний'}: карту исполняет ${NAME[other(L)]}. Принимаешь — отдай телефон. Отказ — красная карточка, и ход переходит партнёру.</div>`;
   else if (state.drawn.from === 'later') h += `<div class="note soft" style="margin:40px 0 12px">Отложено с прошлого раза — выполняем?</div>`;
   else if (state.drawn.from === 'rel') h += `<div class="note soft" style="margin:40px 0 12px">Подсказка к сценарию — берём?</div>`;
   else h += `<div style="height:44px"></div>`;
@@ -2029,7 +2030,7 @@ function modalView() {
         <li>Выпала карта: <b>Играем</b>, <b>Отложить на день</b>, <b>Не сейчас</b> или <b>Никогда</b> — тогда карта исчезнет, ход уйдёт партнёру на ${FORCED_TURNS} раза и будет <b>красная карточка</b>.</li>
         <li><b>★ Любимые карты</b> (в избранном) выпадают чаще.</li>
         <li><b>★ Джокер</b> — карт-бланш: выпал — значит, играешь. Любая карта колоды (можно взять версию, где ведёт партнёр) или своя фантазия, сейчас или на другой день. Или отдай ход партнёру.</li>
-        <li><b>⇅ Мазо-карта</b>: ведущий сам становится нижним. Отказ — красная карточка.</li>
+        <li><b>⇅ Мазо-карта</b>: ведущий сам становится нижним. Отказ — красная карточка, и ход переходит партнёру.</li>
         <li>Пропустил ход или отказался подчиняться — <b>штраф на выбор ведущего</b>.</li>
         <li>🎁 Вместо своего хода можно <b>подарить</b> его партнёру — или подарок выпадет картой. Подарок — комбо на сегодня (сценарий, до ${POSES_PER_TURN} поз и действие) и ${GIFT_PLANS} игры на свободные дни. Первая карта — джокер, «Отложить» без ограничений, без мазо-карт.</li>
         <li>Карту можно прочитать вслух, а можно положить телефон <b>экраном вниз</b> и устроить сюрприз. Проверить — потом, в журнале.</li>
