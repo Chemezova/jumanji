@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 80;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 81;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -222,7 +222,8 @@ function cardFor(card, L, tone) {
 function toneFor(card) {
   if (!card.tones) return undefined;
   if (card.toneNames) return 'mid';
-  return state.lvlMax <= 1 ? 'soft' : state.lvlMax === 2 ? 'mid' : 'hard';
+  const t = state.lvlMax <= 1 ? 'soft' : state.lvlMax === 2 ? 'mid' : 'hard';
+  return card.tones[t] ? t : 'mid';   // у карты может не быть нежной или жёсткой версии
 }
 const toneLabel = (card, t) => (card.toneNames || TONES)[t];
 // Развилки открываются, когда основную версию сыграли toneAfter раз
@@ -467,9 +468,11 @@ function endTurn() {
     state.forced.left--;
     if (state.forced.left > 0) { state.leader = state.forced.who; return; }
   }
+  // подарок заменил ход дарителя — дальше по кругу ход получателя: он ведёт и следующий
+  const giftTo = state.forced && state.forced.gift ? state.forced.who : null;
   state.forced = null;
   // пока идёт сценарий, ходы чередуются при любом режиме — стрелку не крутят
-  if ((state.pickMode === 'turns' || state.scenario) && state.leader) state.leader = other(state.leader);
+  if ((state.pickMode === 'turns' || state.scenario) && state.leader) state.leader = giftTo || other(state.leader);
   else state.leader = null;
 }
 // Сценарий идёт и ведущий есть: ход сам переходит по очереди, менять ведущего нельзя
