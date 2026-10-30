@@ -1,6 +1,6 @@
 // Офлайн-режим: держим файлы приложения в кэше.
 // При изменении файлов увеличить номер версии.
-const CACHE = 'jumanji-v84';
+const CACHE = 'jumanji-v85';
 const FILES = ['./', 'index.html', 'style.css', 'deck.js', 'app.js', 'manifest.json', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 const NET_WAIT = 4000;   // столько ждём сеть, потом отдаём кэш — чтобы при плохом интернете не висеть
 

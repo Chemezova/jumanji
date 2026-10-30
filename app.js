@@ -1,7 +1,7 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 84;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 85;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
@@ -482,6 +482,8 @@ function endTurn() {
   if ((state.pickMode === 'turns' || state.scenario) && state.leader) state.leader = giftTo || other(state.leader);
   else state.leader = null;
 }
+// Сценарий с заданной позой (fixedPose — список в cards-23-bundles): колода поз закрыта, позы — только из подборки
+const poseFixed = () => !!(state.when === 'now' && state.scenario && byId(state.scenario.id)?.fixedPose);
 // Сценарий идёт и ведущий есть: ход сам переходит по очереди, менять ведущего нельзя
 const scenarioTurns = () => !!(state.scenario && state.leader);
 function waitScenario() { toast('Пока идёт сценарий, ходы чередуются сами. Стрелка — после «Сценарий сыгран»'); }
@@ -503,7 +505,8 @@ function giftCheck() {
   const f = state.forced;
   if (f.plans > 0 || state.playing || state.drawn) return '';
   const u = state.turnUsed || {};
-  const full = f.comboDone || ((u.scenario || state.scenario) && (u.pose || 0) >= POSES_PER_TURN && (u.action || 0) >= 1);
+  const posesDone = (u.pose || 0) >= POSES_PER_TURN || (poseFixed() && !relChips('pose'));   // позы из подборки кончились
+  const full = f.comboDone || ((u.scenario || state.scenario) && posesDone && (u.action || 0) >= 1);
   if (!full) return '';
   endTurn();
   return ' Подарок выбран.' + nextText();
@@ -614,6 +617,7 @@ const actions = {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) { ui.screen = 'card'; window.scrollTo(0, 0); return; }   // сначала решение по вытянутой
     if (state.playing && !inGift()) return waitPlaying();   // обычный ход: одна карта, сначала «Сыграли»
+    if (d.t === 'pose' && poseFixed()) return toast('Позу задаёт сценарий — выбери из подборки под ним');
     const why = canDraw(d.t);
     if (why) return toast(why);
     if ((state.turnLocked || {})[d.t]) { ui.modal = { type: 'seen', t: d.t }; return; }
@@ -1358,7 +1362,9 @@ function dashView() {
   const u = usedNow();
   // идущий сценарий — наверху; в планы сценарий тянется, даже когда сегодняшний идёт
   if (!sc || state.when === 'next') h += deckBtn('scenario', u.scenario ? '✓ в ходе' : '');
-  h += deckBtn('pose', u.pose ? `${u.pose} / ${POSES_PER_TURN}` : '') + relChips('pose') + playedChips('pose');
+  if (!poseFixed()) h += deckBtn('pose', u.pose ? `${u.pose} / ${POSES_PER_TURN}` : '');
+  else if (relChips('pose')) h += `<div class="note soft" style="margin:12px 0 0">❦ Позу задаёт сценарий — возьми одну из подборки</div>`;
+  h += relChips('pose') + playedChips('pose');
   h += deckBtn('action', u.action ? '✓ в ходе' : '') + relChips('action') + playedChips('action');
   if (!state.turnPlays && !f) h += `<div class="who-row"><button class="btn ghost small" data-act="skip">Пропустить ход (штраф)</button></div>`;
 
