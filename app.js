@@ -1,12 +1,12 @@
 // Джуманджи — игра для двоих. Всё хранится на телефоне (localStorage).
 
 const STORE_KEY = 'jumanji.v1';
-const APP_VERSION = 87;            // совпадает с номером CACHE в sw.js — видно в Настройках
+const APP_VERSION = 88;            // совпадает с номером CACHE в sw.js — видно в Настройках
 const KEY_STORE = 'jumanji.key';  // ключ к колоде после первого ввода пароля
 const MIN = 60 * 1000;
 const GAME_MS = 3 * 60 * MIN;     // сценарий и игра живут 3 часа
 const MAX_PER_GAME = 4;            // поз и действий за игру
-const FORCED_TURNS = 3;            // после «Никогда» ход у партнёра столько раз
+const FORCED_TURNS = 3;            // старые сохранения: штраф «ход у партнёра 3 раза» (сейчас «Никогда» отдаёт партнёру один ход)
 const HE_CHANCE = 0.5;             // доля «ОН» в стрелке
 const FAV_WEIGHT = 3;
 const JOKER_WEIGHT = 3;            // джокер выпадает чаще обычной карты
@@ -71,6 +71,7 @@ function emptyState() {
     leader: null,         // M | F
     forced: null,         // { who, left, gift } — ходы закреплены: штраф за «Никогда» или подарок
     game: null,           // { start, pose, action }
+    evening: null,        // { leader, items: [{ id, top, tone, note, via }], start, done: [] } — игра на сегодня: собирается, потом идёт
     scenario: null,       // { id, leader, start }
     playing: null,        // { id, leader, start }
     drawn: null,          // { id, from } — вытянутая карта ждёт решения
@@ -136,6 +137,13 @@ for (const id of ['jk-scenario', 'jk-pose', 'jk-action']) delete state.never[id]
 if (state.forced && state.forced.gift && state.forced.plans === undefined)
   state.forced = { who: state.forced.who, gift: true, plans: GIFT_PLANS, jokerDone: state.forced.jokerDone };
 
+if (!state.evening && (state.scenario || state.playing)) {
+  const s = state.scenario, pl = state.playing, items = [];
+  if (s) items.push({ id: s.id, top: s.leader, tone: s.tone });
+  if (pl && (!s || pl.id !== s.id)) items.push({ id: pl.id, top: pl.leader, tone: pl.tone });
+  state.evening = { leader: (s || pl).leader, items, start: (s || pl).start, done: [] };
+}
+
 // Экран и всплывающие окна — не сохраняются
 const ui = {
   screen: 'dash',       // dash | shuffle | card | playing | settings | journal
@@ -192,8 +200,8 @@ function turns(n) { return `${n} ${plural(n, 'ход', 'хода', 'ходов')
 const fixedWhy = f => (f.gift ? 'идёт подарок' : 'штраф за «Никогда»');
 // подарок: сколько назначений на другие дни осталось
 const giftLeft = f => (f.plans ? `ещё ${f.plans} ${plural(f.plans, 'назначение', 'назначения', 'назначений')} на свободные дни` : 'назначения использованы');
-// в подарок — только свободные дни: где уже есть назначенная или отложенная карта, второй не будет
-const busyDay = day => state.later.some(x => x.day === day);
+// один день — одна игра: где уже есть назначенная или отложенная карта, второй не будет (except — карта, которую переносим)
+const busyDay = (day, except) => state.later.some(x => x.day === day && x.id !== except);
 // сейчас идут подаренные ходы, и ведёт получатель подарка
 const inGift = () => !!(state.forced && state.forced.gift && state.leader === state.forced.who);
 // Минимальное время карты: 40 мин, 2 ч, 1 сутки
@@ -282,6 +290,9 @@ function toast(text) {
 function expire() {
   const t = now();
   let changed = false;
+  // запущенная игра через 3 часа заканчивается сама — как по кнопке «Игра окончена»
+  if (state.evening && state.evening.start && t - state.evening.start > GAME_MS && !state.drawn) { endEvening(); save(); return; }
+  if (state.evening) return;   // пока игра собирается или идёт, её сценарий не истекает
   if (state.scenario && t - state.scenario.start > GAME_MS) { state.scenario = null; changed = true; }
   // сценарий, по которому уже нажали «Сыграли» (остался от прежней версии), — снять
   if (state.scenario && state.log.some(e => e.r === 'done' && e.id === state.scenario.id && e.ts >= state.scenario.start)) {
@@ -293,11 +304,6 @@ function expire() {
   if (changed) save();
 }
 
-function ensureGame() {
-  if (!state.game) state.game = { start: now(), pose: 0, action: 0 };
-}
-
-function used(type) { return state.game ? state.game[type] || 0 : 0; }
 
 // Лимиты хода у «Сейчас» и «На следующий раз» свои: можно взять комплект на сегодня и ещё один в планы
 function usedNow() {
@@ -311,7 +317,7 @@ function canDraw(type) {
   // подарок: на другие дни — пока есть назначения, на сегодня — комбо, пока его не сыграли
   if (inGift() && state.when === 'next') return f.plans > 0 ? '' : 'Назначения подарка закончились';
   if (inGift() && f.comboDone) return 'Комбо подарка на сегодня сыграно — остались назначения в «На следующий раз»';
-  if (type === 'scenario' && state.scenario && state.when !== 'next') return 'Сценарий уже идёт — переиграть нельзя';
+  if (type === 'scenario' && state.scenario && state.when !== 'next') return 'Сценарий в игре на сегодня уже есть';
   const u = usedNow()[type];
   if (type === 'pose' && (u || 0) >= POSES_PER_TURN) return `${POSES_PER_TURN} позы в этом ходе уже взяты`;
   // действия: одно, а пока идёт сценарий — до трёх
@@ -470,7 +476,7 @@ function resetTurn() {
 // Сценарий от смены хода не заканчивается: он — рамка вечера, до «Сценарий сыгран», «Игра окончена» или стоп-слова
 function endTurn() {
   resetTurn();
-  closePlaying();
+  if (!evOn()) closePlaying();   // идёт игра на сегодня — её карта живёт, это лишь ход планирования
   if (state.forced && !state.forced.gift) {
     state.forced.left--;
     if (state.forced.left > 0) { state.leader = state.forced.who; return; }
@@ -478,15 +484,47 @@ function endTurn() {
   // подарок заменил ход дарителя — дальше по кругу ход получателя: он ведёт и следующий
   const giftTo = state.forced && state.forced.gift ? state.forced.who : null;
   state.forced = null;
-  // пока идёт сценарий, ходы чередуются при любом режиме — стрелку не крутят
-  if ((state.pickMode === 'turns' || state.scenario) && state.leader) state.leader = giftTo || other(state.leader);
+  if (state.pickMode === 'turns' && state.leader) state.leader = giftTo || other(state.leader);
   else state.leader = null;
 }
 // Сценарий с заданной позой (fixedPose — список в cards-23-bundles): колода поз закрыта, позы — только из подборки
 const poseFixed = () => !!(state.when === 'now' && state.scenario && byId(state.scenario.id)?.fixedPose);
-// Сценарий идёт и ведущий есть: ход сам переходит по очереди, менять ведущего нельзя
-const scenarioTurns = () => !!(state.scenario && state.leader);
-function waitScenario() { toast('Пока идёт сценарий, ходы чередуются сами. Стрелка — после «Сценарий сыгран»'); }
+
+// Игра на сегодня. Ведущий собирает её (сценарий, до 3 поз, действие — сколько захочет) и запускает.
+// Пока игра идёт, новых карт на сегодня нет: стрелка и ходы — только для «На следующий раз».
+const evOn = () => !!(state.evening && state.evening.start);                                  // игра идёт
+const evBuilding = () => !!(state.evening && !state.evening.start && state.evening.items.length);   // собирается
+const evNowLocked = () => evOn() && state.when === 'now';
+function waitEvening() { toast('Игра на сегодня уже идёт. Новые карты — после «Игра окончена» или в «На следующий раз»'); }
+// Что ещё можно добавить в игру: «сценарий, 2 позы и действие»
+function evLeft() {
+  const u = state.turnUsed || {};
+  const parts = [];
+  if (!u.scenario && !state.scenario) parts.push('сценарий');
+  const poses = poseFixed() && !relChips('pose') ? 0 : POSES_PER_TURN - (u.pose || 0);
+  if (poses > 0) parts.push(`${poses} ${plural(poses, 'поза', 'позы', 'поз')}`);
+  const maxA = state.scenario ? REL_PER_TURN : 1;
+  const acts = maxA - (u.action || 0);
+  if (acts > 0) parts.push(`${acts} ${plural(acts, 'действие', 'действия', 'действий')}`);
+  return parts.length > 1 ? parts.slice(0, -1).join(', ') + ' и ' + parts[parts.length - 1] : parts[0] || '';
+}
+// Собираемую игру — сбросить (ход ушёл партнёру или передумали)
+function clearBuilding() {
+  if (state.evening && !state.evening.start) { state.evening = null; state.scenario = null; }
+}
+// Игра окончена: кнопкой, стоп-словом, отказом подчиниться или через 3 часа. Ход того, кто её вёл, закончился
+function endEvening() {
+  const ev = state.evening;
+  closePlaying();
+  const sc = state.scenario;
+  if (ev && ev.start && sc && !ev.done.includes(sc.id)) state.log.push({ ts: now(), id: sc.id, L: sc.leader, r: 'done', dur: now() - sc.start });
+  state.scenario = null; state.game = null; state.evening = null; ui.skipLater = {};
+  releaseWake();
+  if (ev && ev.leader) state.leader = ev.leader;
+  if (inGift()) { state.forced.comboDone = true; return giftCheck(); }
+  endTurn();
+  return nextText();
+}
 
 // Обычный ход — одна карта: сыграли, назначили или отложили — ход переходит сам.
 // В подарок ход остаётся у получателя, пока он не выберет всё или не закончит подарок.
@@ -504,10 +542,7 @@ const nextText = () => (state.leader ? ` Ход переходит: ведёт $
 function giftCheck() {
   const f = state.forced;
   if (f.plans > 0 || state.playing || state.drawn) return '';
-  const u = state.turnUsed || {};
-  const posesDone = (u.pose || 0) >= POSES_PER_TURN || (poseFixed() && !relChips('pose'));   // позы из подборки кончились
-  const full = f.comboDone || ((u.scenario || state.scenario) && posesDone && (u.action || 0) >= 1);
-  if (!full) return '';
+  if (!f.comboDone) return '';   // комбо на сегодня — когда игру запустили
   endTurn();
   return ' Подарок выбран.' + nextText();
 }
@@ -538,6 +573,7 @@ function markPlayed(card) {
 
 // Ход уходит партнёру со штрафом: пропуск, слишком много «потом»
 function passTurn(L, reason) {
+  clearBuilding();
   if (state.forced) endTurn();
   else { resetTurn(); state.leader = other(L); }
   ui.modal = { type: 'punish', who: L, reason };
@@ -576,10 +612,9 @@ const actions = {
   pickLeader(d) {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
-    if (state.playing) return waitPlaying();
     if (state.turnPlays) return toast('Ход ещё идёт');
     if (state.forced) return toast(`Ход у ${state.forced.who === 'M' ? 'него' : 'неё'}: ${fixedWhy(state.forced)}`);
-    if (scenarioTurns()) return waitScenario();
+    if (evNowLocked()) return waitEvening();
     state.leader = d.l; save();
   },
   pickMode(d) { state.pickMode = d.m; save(); },
@@ -587,10 +622,9 @@ const actions = {
   spin() {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
-    if (state.playing) return waitPlaying();
     if (state.turnPlays) return toast('Ход ещё идёт');
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
-    if (scenarioTurns()) return waitScenario();
+    if (evNowLocked()) return waitEvening();
     ui.modal = { type: 'spin', result: null };
   },
   spinGo() {
@@ -616,7 +650,9 @@ const actions = {
   draw(d) {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) { ui.screen = 'card'; window.scrollTo(0, 0); return; }   // сначала решение по вытянутой
-    if (state.playing && !inGift()) return waitPlaying();   // обычный ход: одна карта, сначала «Сыграли»
+    if (state.when === 'now' && evOn()) return waitEvening();
+    if (state.when === 'next' && evBuilding()) return toast('Сначала запустите собранную игру на сегодня — или сбросьте её');
+    if (state.when === 'now' && !state.evening && busyDay(today())) return toast('На сегодня уже назначена игра — откройте её в «По плану на сегодня» или перенесите');
     if (d.t === 'pose' && poseFixed()) return toast('Позу задаёт сценарий — выбери из подборки под ним');
     const why = canDraw(d.t);
     if (why) return toast(why);
@@ -655,7 +691,7 @@ const actions = {
   relOpen(d) {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
-    if (state.playing && !inGift()) return waitPlaying();
+    if (evNowLocked()) return waitEvening();
     const why = canDraw(byId(d.id).type);
     if (why) return toast(why);
     state.drawn = { id: d.id, from: 'rel' }; save();
@@ -680,7 +716,7 @@ const actions = {
   openPlanned(d) {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
-    if (state.playing && !inGift()) return waitPlaying();
+    if (evNowLocked()) return waitEvening();
     if (!state.leader) return toast('Сначала выберите ведущего');
     state.drawn = fromLater(d.id); save();
     ui.screen = 'card'; window.scrollTo(0, 0);
@@ -728,28 +764,53 @@ const actions = {
       ui.modal = { type: 'schedule', mode: 'plan', day: '' };
       return;
     }
+    if (evOn()) return toast('Игра на сегодня уже идёт — эту карту назначьте на другой день');
     removeLater(card.id);
-    ensureGame();
     const top = state.drawn.top || topFor(card, state.leader);
     const tone = state.drawn.tone;
-    log(card.id, 'play', Object.assign({ L: top }, state.drawn.from === 'joker' ? { via: 'joker' } : {}, tone ? { tone } : {}, wishFor(card)));
+    const item = Object.assign({ id: card.id, top }, tone ? { tone } : {}, state.drawn.from === 'joker' ? { via: 'joker' } : {}, wishFor(card));
+    if (!state.evening) state.evening = { leader: state.leader, items: [], start: null, done: [] };
+    state.evening.items.push(item);
     if (state.newToy && usesToy(card, state.newToy)) state.newToy = null;   // новинку обыграли
     markPlayed(card);
     state.turnPlays++;
     state.drawn = null; ui.jokerNote = '';
-    // сценарий — рамка вечера: идёт на главной, а ход сразу переходит — дальше позы и действия к нему
-    if (card.type === 'scenario') {
-      state.scenario = { id: card.id, leader: top, start: now(), tone };
-      const t = turnOver();
-      save(); ui.screen = 'dash'; window.scrollTo(0, 0);
-      return toast(`Сценарий идёт.${t}`);
-    }
-    state.game[card.type] = used(card.type) + 1;
-    closePlaying();
-    state.playing = { id: card.id, leader: top, start: now(), tone };
-    save();
-    ui.screen = 'playing';
-    window.scrollTo(0, 0);
+    // сценарий — рамка игры: следующие позы и действия к нему — из подборки и близкой остроты
+    if (card.type === 'scenario') state.scenario = { id: card.id, leader: top, start: now(), tone };
+    save(); ui.screen = 'dash'; window.scrollTo(0, 0);
+    ui.modal = { type: 'evening' };
+  },
+  // запустить собранную игру: дальше новых карт на сегодня нет
+  evGo() {
+    const ev = state.evening;
+    if (!ev || !ev.items.length) return;
+    ev.start = now();
+    state.game = { start: ev.start };
+    for (const it of ev.items)
+      state.log.push(Object.assign({ ts: ev.start, id: it.id, L: it.top, r: 'play' }, it.via ? { via: it.via } : {}, it.tone ? { tone: it.tone } : {}, it.note ? { note: it.note } : {}));
+    if (state.scenario) state.scenario.start = ev.start;
+    resetTurn();   // сбор закончен: дальше — только планы на другие дни, стрелка для них свободна
+    let t = '';
+    if (inGift()) { state.forced.comboDone = true; t = giftCheck(); }
+    ui.modal = null; save(); window.scrollTo(0, 0);
+    toast('Игра началась. Новых карт на сегодня больше нет — до «Игра окончена».' + t);
+  },
+  evMore() { ui.modal = null; },
+  // сбросить собираемую игру: карты возвращаются в колоду, ход остаётся
+  evCancel() {
+    clearBuilding(); resetTurn(); save();
+    toast('Сбор игры сброшен');
+  },
+  // карта запущенной игры: сценарий — посмотреть, поза или действие — в игру с таймером
+  evOpen(d) {
+    if (state.penaltyDue) return waitPenalty();
+    const ev = state.evening;
+    const it = ev.items.find(x => x.id === d.id);
+    if (!it) return;
+    if (byId(it.id).type === 'scenario' || ev.done.includes(it.id)) { ui.peek = it.id; return; }
+    if (state.playing && state.playing.id !== it.id) return waitPlaying();
+    if (!state.playing) state.playing = { id: it.id, leader: it.top, start: now(), tone: it.tone };
+    save(); ui.screen = 'playing'; window.scrollTo(0, 0);
     wakeLock();
   },
   // «Отложить» и «Играем» в режиме «на следующий раз» — сначала назначить день
@@ -766,6 +827,7 @@ const actions = {
     const day = ui.modal.day || ($('#planDay') && $('#planDay').value);
     if (!day) return toast('Выберите день');
     const mode = ui.modal.mode;
+    if (busyDay(day, mode === 'move' ? ui.modal.id : null)) return toast('На этот день уже есть игра — выберите свободный');
     if (mode === 'move') {
       const x = state.later.find(x => x.id === ui.modal.id);
       ui.modal = null;
@@ -773,7 +835,6 @@ const actions = {
       ui.calDay = day; ui.calMonth = day.slice(0, 7);
       return toast(`Перенесено на ${dayLabel(day)}`);
     }
-    if ((mode === 'plan' || mode === 'jokerPlan') && inGift() && busyDay(day)) return toast('На этот день уже есть игра — в подарок только свободные дни');
     ui.modal = null;
     if (mode === 'jokerPlan') {   // джокер: выбранная карта — на выбранный день
       const ch = ui.jokerChoice;
@@ -793,7 +854,7 @@ const actions = {
     if (!card.joker) st.l++;   // джокер «Потом» не понижает и в «Никогда» сам не уходит
     ui.screen = 'dash'; state.drawn = null;
     // обычный ход: отложить понравившуюся карту на день — это и есть выбор хода; в подарок — без ограничений
-    const t = inGift() ? '' : turnOver();
+    const t = inGift() || state.turnPlays ? '' : turnOver();
     if (st.l >= LATER_TO_NEVER) {
       state.never[card.id] = true;
       removeLater(card.id);
@@ -883,7 +944,8 @@ const actions = {
     removeLater(card.id);
     log(card.id, 'never');
     if (!inGift()) {   // в подарок ход остаётся у получателя: только карта и красная карточка
-      state.forced = { who: other(L), left: FORCED_TURNS };
+      clearBuilding();
+      state.forced = null;
       state.leader = other(L);
       resetTurn();
     }
@@ -925,16 +987,20 @@ const actions = {
       return;
     }
     state.log.push({ ts: now(), id: p.id, L: p.leader, r: 'done', dur: passed });
-    if (state.scenario && state.scenario.id === p.id) state.scenario = null;   // сценарий сыгран — колода снова открыта
     state.playing = null;
-    const t = turnOver();
+    const ev = state.evening;
+    if (ev && !ev.done.includes(p.id)) ev.done.push(p.id);
+    const left = ev ? ev.items.filter(it => !ev.done.includes(it.id)).length : 0;
     save();
-    ui.modal = null; ui.screen = 'dash';
+    ui.modal = null; ui.screen = 'dash'; window.scrollTo(0, 0);
     releaseWake();
-    toast(`Сыграно.${t}`);
+    toast(left ? 'Сыграно. Дальше — следующая карта игры' : 'Сыграно. Всё из игры сыграно — нажмите «Игра окончена»');
   },
+  // отказ подчиниться: игра заканчивается, нижнему — красная карточка
   refused() {
     const p = state.playing;
+    endEvening();
+    save(); ui.screen = 'dash';
     ui.modal = { type: 'punish', who: other(p.leader), reason: 'отказ подчиниться', by: p.leader };
   },
   stop() { ui.modal = { type: 'stop' }; },
@@ -943,11 +1009,12 @@ const actions = {
     const p = state.playing;
     if (p) state.log.push({ ts: now(), id: p.id, L: p.leader, r: 'stop', dur: now() - p.start });
     const sc = state.scenario;
-    if (sc) state.log.push({ ts: now(), id: sc.id, L: sc.leader, r: 'stop', dur: now() - sc.start });
-    state.playing = null; state.game = null; state.scenario = null;
+    if (sc && evOn()) state.log.push({ ts: now(), id: sc.id, L: sc.leader, r: 'stop', dur: now() - sc.start });
+    state.playing = null;
+    if (evOn()) state.scenario = null;   // сценарий уже записан стоп-словом
     state.drawn = null; ui.jokerNote = ''; ui.jokerPick = null; ui.jokerChoice = null;
-    let t;   // закончили — ход сделан; в подарок сгорает только комбо на сегодня
-    if (inGift()) { state.forced.comboDone = true; t = giftCheck(); } else { endTurn(); t = nextText(); }
+    clearBuilding();
+    const t = endEvening();   // закончили — ход сделан; в подарок сгорает только комбо на сегодня
     save();
     ui.modal = null; ui.screen = 'dash';
     releaseWake();
@@ -1044,10 +1111,12 @@ const actions = {
   // сценарий на дашборде
   viewScenario() { ui.peek = state.scenario.id; },
   // сценарий сыгран — рамка снята, колода сценариев снова открыта; ход от этого не меняется
+  // сценарий сыгран — отметка в игре; сама игра идёт до «Игра окончена»
   scenarioDone() {
-    const sc = state.scenario;
+    const sc = state.scenario, ev = state.evening;
     state.log.push({ ts: now(), id: sc.id, L: sc.leader, r: 'done', dur: now() - sc.start });
-    state.scenario = null; ui.peek = null; save();
+    if (ev && !ev.done.includes(sc.id)) ev.done.push(sc.id);
+    ui.peek = null; save();
     toast('Сценарий сыгран');
   },
   endGame() {
@@ -1055,17 +1124,9 @@ const actions = {
     ui.modal = { type: 'endGame' };
   },
   endGameYes() {
-    const wasPlaying = !!state.playing;
-    closePlaying();
-    const sc = state.scenario;
-    if (sc) state.log.push({ ts: now(), id: sc.id, L: sc.leader, r: 'done', dur: now() - sc.start });
-    state.game = null; state.scenario = null; ui.skipLater = {};
-    if (inGift()) { state.forced.comboDone = true; giftCheck(); }   // комбо подарка — на сегодня, назначения остаются
-    else if (wasPlaying) endTurn();
-    else resetTurn();
-    if (state.pickMode === 'random' && !state.forced) state.leader = null;
-    save(); ui.modal = null;
-    toast('Игра завершена');
+    const t = endEvening();   // в подарок сгорает только комбо на сегодня, назначения остаются
+    save(); ui.modal = null; ui.screen = 'dash';
+    toast('Игра завершена.' + t);
   },
 
   // навигация
@@ -1167,7 +1228,7 @@ const actions = {
   gift() {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
-    if (state.playing) return waitPlaying();
+    if (evOn()) return waitEvening();
     if (state.turnPlays) return toast('Ход ещё идёт');
     if (state.forced) return toast(`Сейчас ведущий закреплён: ${fixedWhy(state.forced)}`);
     ui.modal = { type: 'gift' };
@@ -1182,7 +1243,7 @@ const actions = {
   giftEnd() {
     if (state.penaltyDue) return waitPenalty();
     if (state.drawn) return waitDecision();
-    if (state.playing) return waitPlaying();
+    clearBuilding();
     endTurn(); save();
     toast('Подарок закончен.' + nextText());
   },
@@ -1279,7 +1340,7 @@ function prepBlock() {
 function dashView() {
   const L = state.leader;
   const f = state.forced;
-  const player = l => `<button class="player ${l} ${L === l ? 'on' : ''}" data-act="pickLeader" data-l="${l}" ${f && f.who !== l ? 'disabled' : ''} ${state.drawn || state.playing || state.penaltyDue || state.turnPlays || scenarioTurns() ? 'data-why="1"' : ''}>
+  const player = l => `<button class="player ${l} ${L === l ? 'on' : ''}" data-act="pickLeader" data-l="${l}" ${f && f.who !== l ? 'disabled' : ''} ${state.drawn || state.penaltyDue || state.turnPlays || evNowLocked() ? 'data-why="1"' : ''}>
       <div class="nm">${NAME[l]}</div>
       <div class="st">${L === l ? 'ведёт' : 'подчиняется'}</div>
       ${f && f.gift && f.who === l ? '<div class="gift-badge">🎁</div>' : ''}
@@ -1296,14 +1357,6 @@ function dashView() {
       <button class="btn primary" data-act="penaltyDone">Выполнено</button>
     </div>`;
   }
-  if (state.playing) {
-    const c = byId(state.playing.id);
-    h += `<button class="deck active" data-act="openPlaying" style="margin-bottom:12px">
-      <div class="sym">⏱</div>
-      <div class="tx"><div class="t">Карта в игре</div><div class="d">${TYPE[c.type].one} · ведёт ${NAME[state.playing.leader]} · вернуться</div></div>
-      <div class="cnt" data-since="${state.playing.start}">${clock(now() - state.playing.start)}</div>
-    </button>`;
-  }
   if (state.drawn) {
     const c = byId(state.drawn.id);
     h += `<button class="deck active" data-act="openDrawn" style="margin-bottom:12px">
@@ -1311,16 +1364,8 @@ function dashView() {
       <div class="tx"><div class="t">Карта ждёт решения</div><div class="d">${TYPE[c.type].one} · вернуться к карте</div></div>
     </button>`;
   }
-  const sc = state.scenario;
-  if (sc) {
-    h += `<button class="deck active" data-act="viewScenario" style="margin-bottom:6px">
-      <div class="sym">${TYPE.scenario.sym}</div>
-      <div class="tx"><div class="t">${esc(scenarioTitle())}</div>
-      <div class="d">Сценарий идёт · ведёт ${NAME[sc.leader]}</div></div>
-      <div class="cnt" data-since="${sc.start}">${clock(now() - sc.start)}</div>
-    </button>
-    <div class="who-row" style="margin:0 0 12px"><button class="btn ghost small" data-act="scenarioDone">Сценарий сыгран</button></div>`;
-  }
+  // Игра на сегодня идёт: все её карты — наверху, по нажатию — в игру
+  if (evOn()) h += eveningBlock();
   // План на сегодня; не сыгранное в свой день — отдельно, с датой и «перенести»
   const todays = state.later.filter(x => x.day === today() && byId(x.id));
   const overdue = state.later.filter(x => x.day && x.day < today() && byId(x.id));
@@ -1330,7 +1375,7 @@ function dashView() {
 
   h += `<div class="players">${player('M')}${player('F')}</div>`;
   h += `<div class="who-row">
-      <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''} ${state.drawn || state.playing || state.penaltyDue || state.turnPlays || scenarioTurns() ? 'data-why="1"' : ''}>➶ Кто сегодня главный?</button>
+      <button class="btn gold" data-act="spin" ${f ? 'disabled' : ''} ${state.drawn || state.penaltyDue || state.turnPlays || evNowLocked() ? 'data-why="1"' : ''}>➶ Кто сегодня главный?</button>
     </div>`;
   h += `<div class="seg">
       <button class="${state.pickMode === 'random' ? 'on' : ''}" data-act="pickMode" data-m="random">Стрелка</button>
@@ -1353,20 +1398,24 @@ function dashView() {
   }
 
   h += `<div class="zone-title"><h2>Ведёт <span class="lead-${L}">${NAME[L]}</span></h2>
-    ${f || state.turnPlays ? '' : '<button class="textlink" data-act="gift">🎁 Подарить ход</button>'}</div>
-    <p class="hint-line">${inGift() ? 'Подарок: сценарий, позы и действие складываются — всё вместе.'
-      : state.scenario && state.when === 'now' ? 'Сценарий идёт — возьми к нему позу или действие. Одна карта за ход.'
-      : 'За ход — одна карта: сыграли, назначили или отложили — и ход переходит.'}</p>`;
+    ${f || state.turnPlays || evOn() ? '' : '<button class="textlink" data-act="gift">🎁 Подарить ход</button>'}</div>`;
 
-  // Сценарий
-  const u = usedNow();
-  // идущий сценарий — наверху; в планы сценарий тянется, даже когда сегодняшний идёт
-  if (!sc || state.when === 'next') h += deckBtn('scenario', u.scenario ? '✓ в ходе' : '');
-  if (!poseFixed()) h += deckBtn('pose', u.pose ? `${u.pose} / ${POSES_PER_TURN}` : '');
-  else if (relChips('pose')) h += `<div class="note soft" style="margin:12px 0 0">❦ Позу задаёт сценарий — возьми одну из подборки</div>`;
-  h += relChips('pose') + playedChips('pose');
-  h += deckBtn('action', u.action ? '✓ в ходе' : '') + relChips('action') + playedChips('action');
-  if (!state.turnPlays && !f) h += `<div class="who-row"><button class="btn ghost small" data-act="skip">Пропустить ход (штраф)</button></div>`;
+  if (evNowLocked()) {
+    h += `<div class="note soft">Игра на сегодня идёт — новых карт до «Игра окончена» нет. Запланировать следующие можно в «На следующий раз».</div>`;
+  } else {
+    h += `<p class="hint-line">${state.when === 'next'
+      ? 'На следующий раз — одна карта за ход: назначили на день или отложили — и ход переходит.'
+      : `Собери игру на сегодня: сценарий, до ${POSES_PER_TURN} поз и действие — сколько захочешь. Потом «Запустить игру».${inGift() ? ' Это подарок.' : ''}`}</p>`;
+    if (state.when === 'now' && evBuilding()) h += buildingBlock();
+    const u = usedNow();
+    // в планы сценарий тянется, даже когда сегодня он уже выбран
+    if (!state.scenario || state.when === 'next') h += deckBtn('scenario', u.scenario ? '✓ в игре' : '');
+    if (!poseFixed()) h += deckBtn('pose', u.pose ? `${u.pose} / ${POSES_PER_TURN}` : '');
+    else if (relChips('pose')) h += `<div class="note soft" style="margin:12px 0 0">❦ Позу задаёт сценарий — возьми одну из подборки</div>`;
+    h += relChips('pose');
+    h += deckBtn('action', u.action ? '✓ в игре' : '') + relChips('action');
+    if (!state.turnPlays && !f) h += `<div class="who-row"><button class="btn ghost small" data-act="skip">Пропустить ход (штраф)</button></div>`;
+  }
 
   // Отложенное
   if (state.later.length) {
@@ -1380,42 +1429,48 @@ function dashView() {
 
   h += prepBlock();
 
-  // Сыграно в этой игре
-  if (state.game) {
-    const played = state.log.filter(e => e.ts >= state.game.start && e.r === 'play' && byId(e.id));
-    h += `<div class="sec">В этой игре</div>`;
-    h += played.length
-      ? `<ul class="list">${played.map(e => {
-        const c = byId(e.id);
-        return `<li data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}"><span>${TYPE[c.type].sym}</span><span class="grow">${esc(playedTitle(e, c))}</span><span class="meta">${NAME[e.L]} · ${hm(e.ts)} ›</span></li>`;
-      }).join('')}</ul>`
-      : `<div class="empty">Пока ничего</div>`;
-    h += `<div class="who-row"><button class="btn primary small" data-act="endGame">Игра окончена</button></div>`;
-  }
   return h;
 }
 
-// Карты этого хода одного типа — под кнопкой колоды, нажатие открывает карту.
-// С новым ходом список начинается заново; вся игра — ниже, в «В этой игре»
-function playedOf(type) {
-  if (!state.game) return [];
-  const from = Math.max(state.game.start, state.turnStart || 0);
-  return state.log.filter(e => e.ts >= from && e.r === 'play' && byId(e.id)?.type === type);
+// Название карты в игре: с версией и фантазией джокера
+const itemTitle = it => playedTitle(Object.assign({ L: it.top }, it), byId(it.id));
+
+// Собираемая игра: что уже взято, что ещё можно, «Запустить»
+function buildingBlock() {
+  const ev = state.evening, left = evLeft();
+  return `<div class="note gift" style="margin-top:12px"><b>Игра на сегодня</b>
+    <ul class="list" style="margin:6px 0">${ev.items.map(it => `<li><span>${TYPE[byId(it.id).type].sym}</span><span class="grow">${esc(itemTitle(it))}</span></li>`).join('')}</ul>
+    ${left ? `<div class="meta">Можно добавить: ${left}.</div>` : '<div class="meta">Всё, что можно, уже выбрано.</div>'}
+    <div class="who-row" style="margin:10px 0 0"><button class="btn primary small" style="flex:1" data-act="evGo">▶ Запустить игру</button>
+    <button class="btn ghost small" data-act="evCancel">Сбросить</button></div></div>`;
 }
+
+// Идущая игра: карты по порядку, сыгранные — с галочкой, идущая — с таймером
+function eveningBlock() {
+  const ev = state.evening;
+  const order = { scenario: 0, pose: 1, action: 2 };
+  const items = ev.items.slice().sort((a, b) => order[byId(a.id).type] - order[byId(b.id).type]);
+  const left = items.filter(it => !ev.done.includes(it.id)).length;
+  return `<div class="evening"><div class="zone-title" style="margin-top:0"><h2>Игра идёт · ведёт <span class="lead-${ev.leader}">${NAME[ev.leader]}</span></h2>
+    <span class="meta" data-since="${ev.start}">${clock(now() - ev.start)}</span></div>
+    ${items.map(it => {
+      const c = byId(it.id), done = ev.done.includes(it.id), on = state.playing && state.playing.id === it.id;
+      return `<button class="deck ${on ? 'active' : ''}" data-act="evOpen" data-id="${it.id}" style="margin-bottom:8px${done ? ';opacity:.55' : ''}">
+        <div class="sym">${TYPE[c.type].sym}</div>
+        <div class="tx"><div class="t">${esc(itemTitle(it))}</div><div class="d">${TYPE[c.type].one}${c.type === 'scenario' ? ' · рамка игры' : ''} · ${done ? 'сыграно' : on ? 'сейчас в игре' : c.type === 'scenario' ? 'открыть' : 'играть'}</div></div>
+        <div class="cnt">${done ? '✓' : on ? `<span data-since="${state.playing.start}">${clock(now() - state.playing.start)}</span>` : '›'}</div>
+      </button>`;
+    }).join('')}
+    ${left ? '' : '<div class="note soft">Всё из игры сыграно.</div>'}
+    <div class="who-row" style="margin:6px 0 16px"><button class="btn ${left ? 'ghost' : 'primary'} small" data-act="endGame">${left ? 'Закончить игру раньше' : 'Игра окончена'}</button></div></div>`;
+}
+
 // Как подписать сыгранную карту: джокер — с загаданной фантазией, карта по джокеру — со звёздочкой
 function playedTitle(e, c) {
   if (c.joker) return e.note ? `★ Джокер: ${e.note}` : '★ Джокер';
   return (e.via === 'joker' ? '★ ' : '') + cardFor(c, e.L || 'M', e.tone).title + (e.tone && e.tone !== 'mid' && !c.toneNames ? ` · ${TONES[e.tone].toLowerCase()}` : '');
 }
 
-function playedChips(type) {
-  const list = playedOf(type);
-  if (!list.length) return '';
-  return `<div class="links played">${list.map(e => {
-    const c = byId(e.id);
-    return `<button class="chip have" data-act="viewPlayed" data-id="${c.id}" data-l="${e.L}">${TYPE[type].sym} ${esc(playedTitle(e, c))}</button>`;
-  }).join('')}</div>`;
-}
 
 // Название идущего сценария: с его тоном, у джокера — с загаданной фантазией
 function scenarioTitle() {
@@ -1426,9 +1481,9 @@ function scenarioTitle() {
 
 // Подсказки идущего сценария — первыми в блоках «Позы» и «Действия»: нажми — карта откроется, решение как обычно
 function relChips(type) {
-  if (state.when === 'next' || !state.scenario) return '';
+  if (state.when === 'next' || !state.scenario || evOn()) return '';
   const sc = byId(state.scenario.id);
-  const played = new Set(state.log.filter(e => e.ts >= state.scenario.start && e.r === 'play').map(e => e.id));
+  const played = new Set((state.evening ? state.evening.items : []).map(it => it.id));
   const list = relatedFor(sc, state.scenario.leader).filter(c => c.type === type && !played.has(c.id)).slice(0, REL_SHOW);
   if (!list.length) return '';
   return `<div class="cloud-h">К сценарию «${esc(scenarioTitle())}»</div><div class="links cloud">${list.map(c =>
@@ -1519,11 +1574,11 @@ function cardScreen() {
     <div class="card-actions">
       <button class="btn primary" data-act="jokerOwn">Играем фантазию</button>
       <button class="btn" data-act="jokerOwn" data-day="1">Фантазию — на день…</button>
-      ${inGift() || state.forced ? '' : `<button class="btn ghost" style="grid-column:1/-1" data-act="jokerGive">Отказаться — ход ${NAME[other(L)]}</button>`}
+      ${inGift() || state.forced || state.turnPlays ? '' : `<button class="btn ghost" style="grid-column:1/-1" data-act="jokerGive">Отказаться — ход ${NAME[other(L)]}</button>`}
     </div>`;
   const rel = card.type === 'scenario' && state.when === 'now' ? relatedFor(card) : [];
   if (rel.length) h += `<div class="sec">К этому сценарию подойдёт</div><div class="links">${rel.slice(0, 12).map(c => `<span class="chip">${TYPE[c.type].sym} ${esc(cardFor(c, topFor(c, L)).title)}</span>`).join('')}</div>
-    <p class="meta" style="margin:4px 0 0">После «Играем» сценарий пойдёт на главной, а эти позы и действия встанут первыми в блоки «Позы» и «Действия».</p>`;
+    <p class="meta" style="margin:4px 0 0">После «Играем» сценарий ляжет в игру на сегодня, а эти позы и действия встанут первыми в блоки «Позы» и «Действия».</p>`;
   if (card.gift) return h + `<div class="card-actions"><button class="btn gold" style="grid-column:1/-1" data-act="giftTurn">🎁 Отдать ход с подарком — ведёт ${NAME[other(L)]}</button></div>`;
   h += card.switch
     ? `<div class="card-actions">
@@ -1532,7 +1587,7 @@ function cardScreen() {
     ${state.drawn.from === 'rel' ? '<button class="btn ghost" style="grid-column:1/-1" data-act="relBack">‹ Назад к подсказкам</button>' : ''}
   </div>`
     : `<div class="card-actions">
-    <button class="btn primary" data-act="play">${state.when === 'next' ? 'Играем — назначить день' : 'Играем'}</button>
+    <button class="btn primary" data-act="play">${state.when === 'next' ? 'Играем — назначить день' : 'Играем — в игру на сегодня'}</button>
     <button class="btn" data-act="schedule" data-mode="later">Отложить на день…</button>
     ${card.joker ? '' : '<button class="btn" data-act="never">Никогда</button>'}
     ${passBtn()}
@@ -1564,14 +1619,8 @@ function playingView() {
     <div class="btns">
       <button class="btn" data-act="peek" data-id="${p.id}">Подсмотреть карту</button>
       <button class="btn primary" data-act="done">Сыграли</button>
-      <button class="btn ghost" data-act="refused">${NAME[other(p.leader)]} отказывается подчиняться</button>
+      <button class="btn ghost" data-act="refused">${NAME[other(p.leader)]} отказывается подчиняться — игра окончена</button>
     </div>
-    ${inGift() && !state.forced.comboDone ? `<div class="sec" style="margin-bottom:0">Добавить к игре — подарок</div>
-    <div class="who-row" style="width:100%;margin-top:0">
-      ${state.scenario ? '' : '<button class="btn small" style="flex:1" data-act="draw" data-t="scenario">+ Сценарий</button>'}
-      <button class="btn small" style="flex:1" data-act="draw" data-t="pose">+ Поза</button>
-      <button class="btn small" style="flex:1" data-act="draw" data-t="action">+ Действие</button>
-    </div>` : ''}
   </div>`;
 }
 
@@ -1622,7 +1671,7 @@ function peekView() {
     <button class="back" data-act="peekClose">‹ Закрыть</button>
     ${inPlay ? (tone ? `<div class="note soft" style="margin-top:40px">${card.toneNames ? '' : 'Тон: '}${toneLabel(card, tone)}</div>` : '') : toneSeg(card, tone, 'peekTone')}
     ${cardHtml(card, L, tone)}
-    ${state.scenario && state.scenario.id === card.id ? '<div class="who-row"><button class="btn small" data-act="scenarioDone">Сценарий сыгран</button></div>' : ''}
+    ${evOn() && state.scenario && state.scenario.id === card.id && !state.evening.done.includes(card.id) ? '<div class="who-row"><button class="btn small" data-act="scenarioDone">Сценарий сыгран</button></div>' : ''}
     <div class="card-tools"><button class="fav ${state.fav[card.id] ? 'on' : ''}" data-act="fav">${state.fav[card.id] ? '★ В избранном' : '☆ В избранное'}</button>
       ${state.later.some(x => x.id === card.id) ? '<button class="textlink" data-act="peekUnlater">Убрать из отложенного</button>' : ''}</div>
   </div></div>`;
@@ -2032,13 +2081,15 @@ function modalView() {
       <ul class="rules">
         <li>Вас двое: <b>ОН</b> и <b>ОНА</b>. Ведущий — <b>верхний</b>, партнёр — <b>нижний</b> и подчиняется полностью.</li>
         <li>Ведущего выбирает <b>стрелка</b> или играете <b>по очереди</b>.</li>
-        <li>За ход — <b>одна карта</b>: сыграли, назначили на день или отложили — и ход сам переходит. Сценарий — рамка вечера: он идёт, а вы по очереди берёте к нему позы и действия.</li>
-        <li>Выпала карта: <b>Играем</b>, <b>Отложить на день</b>, <b>Не сейчас</b> или <b>Никогда</b> — тогда карта исчезнет, ход уйдёт партнёру на ${FORCED_TURNS} раза и будет <b>красная карточка</b>.</li>
+        <li><b>Играем сейчас</b>: ведущий собирает игру на сегодня — сценарий, до ${POSES_PER_TURN} поз и действие (со сценарием — до ${REL_PER_TURN}), сколько захочет — и запускает. Пока игра идёт, новых карт на сегодня нет: до «Игра окончена», стоп-слова, отказа подчиниться или трёх часов. Потом ход переходит.</li>
+        <li><b>На следующий раз</b>: по одной карте за ход — назначили на день или отложили, и ход переходит. Стрелку можно крутить, даже пока идёт сегодняшняя игра.</li>
+        <li>Один день — одна игра: на занятый день другую не назначить и не перенести.</li>
+        <li>Выпала карта: <b>Играем</b>, <b>Отложить на день</b>, <b>Не сейчас</b> или <b>Никогда</b> — тогда карта исчезнет, будет <b>красная карточка</b> и ход перейдёт партнёру: игру собирает он.</li>
         <li><b>★ Любимые карты</b> (в избранном) выпадают чаще.</li>
         <li><b>★ Джокер</b> — карт-бланш: выпал — значит, играешь. Любая карта колоды (можно взять версию, где ведёт партнёр) или своя фантазия, сейчас или на другой день. Или отдай ход партнёру.</li>
         <li><b>⇅ Мазо-карта</b>: ведущий сам становится нижним. Отказ — красная карточка, и ход переходит партнёру.</li>
         <li>Пропустил ход или отказался подчиняться — <b>штраф на выбор ведущего</b>.</li>
-        <li>🎁 Вместо своего хода можно <b>подарить</b> его партнёру — или подарок выпадет картой. Подарок — комбо на сегодня (сценарий, до ${POSES_PER_TURN} поз и действие) и ${GIFT_PLANS} игры на свободные дни. Первая карта — джокер, «Отложить» без ограничений, без мазо-карт.</li>
+        <li>🎁 Вместо своего хода можно <b>подарить</b> его партнёру — или подарок выпадет картой. Партнёр собирает игру на сегодня и назначает ${GIFT_PLANS} игры на свободные дни. Первая карта — джокер, «Отложить» без ограничений, без мазо-карт.</li>
         <li>Карту можно прочитать вслух, а можно положить телефон <b>экраном вниз</b> и устроить сюрприз. Проверить — потом, в журнале.</li>
         <li>У каждой карты есть <b>минимальное время</b>: не на отвяжись.</li>
         <li><b>Стоп-слово сильнее любых правил.</b> ${state.stopWord ? `Ваше — <b>«${esc(state.stopWord)}»</b>. ` : 'Задайте его в Настройках. '}Прозвучало — останавливаетесь сразу, без штрафов и вопросов.</li>
@@ -2066,16 +2117,16 @@ function modalView() {
         const n = (wd - base.getDay() + 7) % 7 || 7;
         if (n > 2) add(name, plus(n));
       }
-      const giftPlan = inGift() && (m.mode === 'plan' || m.mode === 'jokerPlan');
-      if (giftPlan) for (let i = opts.length - 1; i >= 0; i--) if (busyDay(opts[i].day)) opts.splice(i, 1);
+      // один день — одна игра: занятые дни не предлагаем
+      for (let i = opts.length - 1; i >= 0; i--) if (busyDay(opts[i].day, m.mode === 'move' ? m.id : null)) opts.splice(i, 1);
       const mode = m.mode === 'jokerPlan' ? 'plan' : m.mode;
       const head = { plan: 'Когда играем?', move: 'Перенести на день', later: 'Отложить на день' }[mode];
       const text = {
         plan: 'Карта ляжет в планы на выбранный день: в этот день её предложат первой, а покупки попадут в «Купить».',
         move: `«${esc((byId(m.id) || {}).title || '')}» — на какой день?`,
         later: 'В этот день карту предложат первой. До него она не будет мешаться.',
-      }[mode] + (giftPlan ? ' Подарок — только свободные дни: где уже есть игра, назначить нельзя.' : '');
-      if (m.mode === 'move') opts.unshift({ label: 'Сегодня', day: today() });
+      }[mode] + ' Один день — одна игра: занятые дни не предлагаются.';
+      if (m.mode === 'move' && !busyDay(today(), m.id) && !state.evening) opts.unshift({ label: 'Сегодня', day: today() });
       body = `<h2>${head}</h2>
       <p class="lead">${text}</p>
       <div class="links">${opts.map(o => `<button class="chip ${m.day === o.day ? 'buy' : ''}" data-act="scheduleDay" data-day="${o.day}">${o.label} · ${dayLabel(o.day)}</button>`).join('')}</div>
@@ -2094,7 +2145,7 @@ function modalView() {
     }
 
     case 'never':
-      body = `<h2>Никогда?</h2><p class="lead">Карта больше не выпадет. Ход перейдёт к ${state.leader === 'M' ? 'ней' : 'нему'} на ${FORCED_TURNS} раза подряд — и изменить это будет нельзя. А ещё вам могут показать красную карточку.</p>
+      body = `<h2>Никогда?</h2><p class="lead">Карта больше не выпадет. Ход перейдёт к ${state.leader === 'M' ? 'ней' : 'нему'}${state.turnPlays ? ', а собранная игра сбросится' : ''}. А ещё вам покажут красную карточку.</p>
       <div class="btns"><button class="btn primary" data-act="neverYes">Никогда</button><button class="btn ghost" data-act="closeModal">Передумал(а)</button></div>`;
       break;
 
@@ -2177,8 +2228,17 @@ function modalView() {
       <div class="btns"><button class="btn primary" data-act="giftYes">Подарить</button><button class="btn ghost" data-act="closeModal">Отмена</button></div>`;
       break;
 
+    case 'evening': {
+      const left = evLeft();
+      body = `<h2>В игре на сегодня</h2>
+      <ul class="list">${state.evening.items.map(it => `<li><span>${TYPE[byId(it.id).type].sym}</span><span class="grow">${esc(itemTitle(it))}</span></li>`).join('')}</ul>
+      <p class="lead">${left ? `Запускаем — или выберем ещё? Можно добавить: ${left}.` : 'Всё, что можно, уже выбрано. Запускаем!'}</p>
+      <div class="btns"><button class="btn primary" data-act="evGo">▶ Запустить игру</button>${left ? '<button class="btn ghost" data-act="evMore">Выбрать ещё</button>' : ''}</div>`;
+      break;
+    }
+
     case 'endGame':
-      body = `<h2>Игра окончена?</h2><p class="lead">Всё, что сейчас идёт, будет отмечено сыгранным.${inGift() ? ' Комбо подарка на сегодня закончится, назначения на другие дни останутся.' : ''}</p>
+      body = `<h2>Игра окончена?</h2><p class="lead">Всё, что сейчас идёт, будет отмечено сыгранным, а ход перейдёт дальше.${inGift() ? ' Подарок: назначения на другие дни останутся.' : ''}</p>
       <div class="btns"><button class="btn primary" data-act="endGameYes">Игра окончена</button><button class="btn ghost" data-act="closeModal">Ещё играем</button></div>`;
       break;
 
